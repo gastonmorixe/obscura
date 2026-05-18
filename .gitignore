@@ -1,2 +1,15 @@
 target/
 .DS_Store
+
+# Local-only test fixtures, third-party extension bundles, and scratch
+# notes that we do not redistribute. Anything in private/ is for the
+# committer's own use and never gets pushed to a public branch.
+private/
+
+# Network-trace dump directory produced by local test tooling.
+.net-dbg/
+
+# Editor / OS noise.
+*.swp
+.idea/
+.vscode/

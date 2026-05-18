@@ -423,6 +423,13 @@ class Element extends Node {
   get outerHTML() { return _domParse("outer_html", this._nid) ?? ""; }
   get innerText() { return this.textContent; }
   set innerText(v) { this.textContent = v; }
+  // HTMLScriptElement.text — the WHATWG spec alias for textContent on
+  // script elements. Many real-world content scripts use
+  // `<script>.text` to read inline JSON-LD or `__NEXT_DATA__`-style
+  // payloads embedded in the page; without this alias they
+  // JSON.parse(undefined) and abort early.
+  get text() { return this.textContent; }
+  set text(v) { this.textContent = String(v ?? ""); }
   get children() {
     const ids = _domParse("element_children", this._nid) || [];
     return ids.map(_wrapEl).filter(Boolean);
@@ -464,9 +471,17 @@ class Element extends Node {
   hasAttribute(n) { return this.getAttribute(n) !== null; }
   hasAttributes() { return true; } // Simplified
   getAttributeNS(ns, n) { return this.getAttribute(n); }
-  querySelector(s) { return _wrapEl(+_dom("query_selector", s)); }
+  // Element-scoped query: spec says strict descendants of `this`. The
+  // previous impl used `query_selector` which is document-rooted, so
+  // calls on a detached subtree (e.g. one populated via `innerHTML =`
+  // on a freshly-created div) returned null even when the matching
+  // child clearly existed under `this`. Many content scripts rely
+  // on the receiver-scoped semantics — `parseHtmlEntities`, the
+  // DOMParser stub in obscura-ext, every `wrapper.querySelector(...)`
+  // call after `wrapper.innerHTML = html`.
+  querySelector(s) { return _wrapEl(+_dom("query_selector_within", String(this._nid), s)); }
   querySelectorAll(s) {
-    const ids = _domParse("query_selector_all", s) || [];
+    const ids = _domParse("query_selector_all_within", String(this._nid), s) || [];
     const list = ids.map(_wrapEl).filter(Boolean);
     list.item = (i) => list[i] || null;
     list.forEach = Array.prototype.forEach.bind(list);
@@ -1018,9 +1033,11 @@ class DocumentFragment extends Node {
   get nodeName() { return "#document-fragment"; }
   get innerHTML() { return _domParse("inner_html", this._nid) ?? ""; }
   set innerHTML(v) { _dom("set_inner_html", this._nid, String(v ?? "")); }
-  querySelector(s) { return _wrapEl(+_dom("query_selector", s)); }
+  // Same fix as Element.querySelector: search descendants of `this`,
+  // not the whole document. Matches the DOM spec.
+  querySelector(s) { return _wrapEl(+_dom("query_selector_within", String(this._nid), s)); }
   querySelectorAll(s) {
-    const ids = _domParse("query_selector_all", s) || [];
+    const ids = _domParse("query_selector_all_within", String(this._nid), s) || [];
     const list = ids.map(_wrapEl).filter(Boolean);
     list.item = (i) => list[i] || null;
     return list;
@@ -2121,6 +2138,59 @@ globalThis.Element = Element;
 globalThis.Document = Document;
 globalThis.EventTarget = Node;
 globalThis.Range = class Range { setStart(){} setEnd(){} collapse(){} selectNodeContents(){} deleteContents(){} cloneContents(){ return document.createDocumentFragment(); } insertNode(){} getBoundingClientRect(){return {x:0,y:0,width:0,height:0,top:0,right:0,bottom:0,left:0};} };
+// Empty stand-ins for DOM-spec classes that real browsers expose. The
+// only thing they need to do is exist so that JS that wrote
+// `node instanceof NamedNodeMap` (or Attr/ShadowRoot/etc.) doesn't
+// throw "Right-hand side of 'instanceof' is not an object". The
+// instanceof check returns false against our placeholders, which is
+// the same answer real browsers give for plain objects of unrelated
+// types — what callers like DOMPurify expect when they're feature-
+// detecting in a non-browser-y context.
+globalThis.NamedNodeMap = globalThis.NamedNodeMap || class NamedNodeMap {};
+globalThis.Attr = globalThis.Attr || class Attr extends Node {};
+globalThis.ShadowRoot = globalThis.ShadowRoot || class ShadowRoot {};
+globalThis.NodeIterator = globalThis.NodeIterator || class NodeIterator { nextNode(){return null;} previousNode(){return null;} };
+globalThis.TreeWalker = globalThis.TreeWalker || class TreeWalker { nextNode(){return null;} previousNode(){return null;} parentNode(){return null;} firstChild(){return null;} lastChild(){return null;} previousSibling(){return null;} nextSibling(){return null;} };
+globalThis.CDATASection = globalThis.CDATASection || class CDATASection extends Node {};
+globalThis.ProcessingInstruction = globalThis.ProcessingInstruction || class ProcessingInstruction extends Node {};
+globalThis.HTMLCollection = globalThis.HTMLCollection || class HTMLCollection {};
+globalThis.NodeList = globalThis.NodeList || class NodeList {};
+globalThis.HTMLFormElement = globalThis.HTMLFormElement || Element;
+globalThis.HTMLInputElement = globalThis.HTMLInputElement || Element;
+globalThis.HTMLAnchorElement = globalThis.HTMLAnchorElement || Element;
+globalThis.HTMLIFrameElement = globalThis.HTMLIFrameElement || Element;
+globalThis.HTMLImageElement = globalThis.HTMLImageElement || Element;
+globalThis.HTMLDocument = globalThis.HTMLDocument || Document;
+globalThis.SVGElement = globalThis.SVGElement || Element;
+// Real DOMParser. The previous stub returned globalThis.document for
+// every parseFromString call, which (a) lies about the parse result and
+// (b) lets DOMPurify-using callers accidentally splice the LIVE page
+// document into wherever they were inserting the parsed fragment.
+// We now spin up a temp <div>, set innerHTML, and return a "document"
+// view backed by that div. Enough surface for HTML-sanitiser
+// libraries and content scripts.
+globalThis.DOMParser = class DOMParser {
+  parseFromString(html, _mimeType) {
+    const wrapper = document.createElement("div");
+    try { wrapper.innerHTML = String(html || ""); } catch { /* tolerate malformed */ }
+    return {
+      _root: wrapper,
+      body: wrapper,
+      documentElement: wrapper,
+      head: wrapper,
+      defaultView: globalThis,
+      createElement: (t) => document.createElement(t),
+      createTextNode: (v) => document.createTextNode(v),
+      querySelector: (sel) => wrapper.querySelector(sel),
+      querySelectorAll: (sel) => wrapper.querySelectorAll(sel),
+      getElementById: (id) => wrapper.querySelector("#" + id),
+      getElementsByTagName: (t) => wrapper.querySelectorAll(t),
+      get textContent() { return wrapper.textContent; },
+      get innerHTML() { return wrapper.innerHTML; },
+      get outerHTML() { return wrapper.outerHTML; },
+    };
+  }
+};
 
 [
   navigator.getBattery, navigator.getGamepads, navigator.sendBeacon,
