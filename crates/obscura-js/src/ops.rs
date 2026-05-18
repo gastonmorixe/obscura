@@ -113,6 +113,9 @@ fn op_dom(state: &OpState, #[string] cmd: String, #[string] arg1: String, #[stri
             dom.get_element_by_id(&arg1).map(|id| id.index().to_string()).unwrap_or("-1".into())
         }
         "query_selector" => {
+            // Document-scoped query (matches CDP `DOM.querySelector` and the
+            // JS-side `Document.prototype.querySelector`). For element-scoped
+            // queries the JS layer dispatches to `query_selector_within`.
             dom.query_selector(&arg1).ok().flatten().map(|id| id.index().to_string()).unwrap_or("-1".into())
         }
         "query_selector_all" => {
@@ -121,6 +124,12 @@ fn op_dom(state: &OpState, #[string] cmd: String, #[string] arg1: String, #[stri
             serde_json::to_string(&ids).unwrap_or("[]".into())
         }
         "query_selector_scoped" => {
+            // Element-scoped query. `arg1` = root node id (as string),
+            // `arg2` = selector. Only descendants of root are inspected.
+            // Used by `Element.prototype.querySelector` so content scripts
+            // that build a detached subtree via `innerHTML =` can find
+            // their own children (parseHtmlEntities + DOMParser stub in
+            // obscura-ext both rely on this).
             let root_nid = arg1.parse::<u32>().unwrap_or(0);
             dom.query_selector_from(NodeId::new(root_nid), &arg2).ok().flatten()
                 .map(|id| id.index().to_string()).unwrap_or("-1".into())

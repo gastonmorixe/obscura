@@ -258,6 +258,38 @@ impl Page {
         }
 
         self.js = Some(rt);
+
+        // If a WebExtension is attached and its host_permissions match
+        // the current URL, inject the extension's chrome.* shim plus its
+        // background scripts before any page JS runs. The shim itself
+        // synthesises a tabs.onUpdated event for the current page so
+        // Content-script-driven extensions then dispatch their per-site
+        // content scripts via the shim's executeScript dispatcher.
+        //
+        // Wrapped in a closure-style block so a failure to build/inject
+        // the preload does NOT abort the navigation — extensions are a
+        // privileged feature, not a load-blocking dependency.
+        if let Some(ext) = &self.context.extension {
+            let url = self.url_string();
+            if ext.matches_url(&url) {
+                let preload = ext.build_preload_script(&url);
+                tracing::info!(
+                    "obscura-ext: injecting preload ({} bytes) for url={}",
+                    preload.len(),
+                    url
+                );
+                if let Some(js) = &mut self.js {
+                    if let Err(e) = js.execute_script("<obscura-ext:preload>", &preload) {
+                        tracing::warn!("obscura-ext: preload script failed: {e}");
+                    }
+                }
+            } else {
+                tracing::debug!(
+                    "obscura-ext: extension does not match url={} (host_permissions miss)",
+                    url
+                );
+            }
+        }
     }
 
     async fn execute_scripts(&mut self) {

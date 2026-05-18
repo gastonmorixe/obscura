@@ -40,6 +40,17 @@ struct Args {
     /// Applied once at startup before any isolate is created.
     #[arg(long, value_name = "FLAGS", allow_hyphen_values = true)]
     v8_flags: Option<String>,
+
+    /// Load a WebExtension bundle and attach it to every BrowserContext.
+    /// Accepts an unpacked directory, a `.zip` / `.xpi` archive, or a
+    /// `.crx` Chrome package. The extension's chrome.* / browser.* APIs
+    /// are emulated by `obscura-ext`. Manifest V2 (Firefox-style) is
+    /// the best-supported flavour today; MV3 bundles load but the
+    /// service-worker lifecycle is not emulated. Multiple `--extension`
+    /// flags are accepted but only the first is currently honoured
+    /// (multi-extension support is on the roadmap).
+    #[arg(long, value_name = "PATH", global = true)]
+    extension: Vec<std::path::PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -227,6 +238,30 @@ fn reject_stealth_with_socks5(proxy: Option<&str>, stealth: bool) -> anyhow::Res
     Ok(())
 }
 
+/// Resolve `--extension <PATH>...` into the single live ExtensionRuntime
+/// we'll attach to every BrowserContext built this run. Returns `Ok(None)`
+/// when no extensions were passed. Multi-extension support is a TODO; for
+/// now we honour the first and warn on extras so users notice the silent
+/// drop.
+fn load_extension_runtime(
+    paths: &[std::path::PathBuf],
+) -> anyhow::Result<Option<Arc<obscura_ext::ExtensionRuntime>>> {
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    if paths.len() > 1 {
+        tracing::warn!(
+            "obscura-ext: multiple --extension flags given; only the first ({}) is loaded",
+            paths[0].display()
+        );
+    }
+    let bundle = obscura_ext::Bundle::load(&paths[0]).map_err(|e| {
+        anyhow::anyhow!("failed to load extension at {}: {e}", paths[0].display())
+    })?;
+    let runtime = obscura_ext::ExtensionRuntime::new(Arc::new(bundle));
+    Ok(Some(Arc::new(runtime)))
+}
+
 /// Normalize a raw `--v8-flags` value into the string we'll hand to V8.
 /// Returns `None` when the user didn't pass the flag, passed an empty string,
 /// or passed only whitespace; in those cases V8 is left untouched.
@@ -259,6 +294,25 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let global_proxy = args.proxy.clone();
+
+    // Load extension bundles up front, before any BrowserContext is built,
+    // so a bad --extension path errors with a clear message rather than
+    // surfacing as a mid-navigation warning. Currently we only honour the
+    // first; multi-extension support requires per-extension state isolation
+    // which is on the roadmap.
+    let extension_runtime: Option<Arc<obscura_ext::ExtensionRuntime>> =
+        load_extension_runtime(&args.extension)?;
+    if let Some(ref ext) = extension_runtime {
+        if !quiet {
+            eprintln!(
+                "Loaded extension: {} v{} (manifest v{}, {} host patterns)",
+                ext.bundle.manifest.name,
+                ext.bundle.manifest.version,
+                ext.bundle.manifest.manifest_version,
+                ext.bundle.manifest.host_patterns.len()
+            );
+        }
+    }
 
     match args.command {
         Some(Command::Serve { port, host, proxy, user_agent, stealth, workers, allow_file_access, storage_dir }) => {
@@ -294,7 +348,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Command::Fetch { url, dump, selector, wait, timeout, wait_until, user_agent, stealth, eval, output, quiet, storage_dir }) => {
             reject_stealth_with_socks5(global_proxy.as_deref(), stealth)?;
-            run_fetch(&url, dump, selector, wait, timeout, &wait_until, user_agent, stealth, eval, output, quiet, global_proxy, storage_dir).await?;
+            run_fetch(&url, dump, selector, wait, timeout, &wait_until, user_agent, stealth, eval, output, quiet, global_proxy, storage_dir, extension_runtime.clone()).await?;
         }
         Some(Command::Scrape { urls, eval, concurrency, format, timeout, quiet }) => {
             run_parallel_scrape(urls, eval, concurrency.get(), &format, timeout, quiet, global_proxy).await?;
@@ -461,6 +515,7 @@ async fn run_fetch(
     quiet: bool,
     proxy: Option<String>,
     storage_dir: Option<std::path::PathBuf>,
+    extension: Option<Arc<obscura_ext::ExtensionRuntime>>,
 ) -> anyhow::Result<()> {
     // --dump original short-circuits the browser stack entirely: fetch the raw
     // response body via HTTP and stream the bytes verbatim. Useful for binary
@@ -478,13 +533,19 @@ async fn run_fetch(
         return Ok(());
     }
 
-    let context = Arc::new(BrowserContext::with_storage_full(
-        "fetch".to_string(),
-        proxy,
-        stealth,
-        user_agent.clone(),
-        storage_dir.clone(),
-    ));
+    let context = {
+        let mut ctx = BrowserContext::with_storage_full(
+            "fetch".to_string(),
+            proxy,
+            stealth,
+            user_agent.clone(),
+            storage_dir.clone(),
+        );
+        if let Some(ext) = extension {
+            ctx = ctx.with_extension(ext);
+        }
+        Arc::new(ctx)
+    };
     let mut page = Page::new("fetch-page".to_string(), context.clone());
 
     if let Some(ref ua) = user_agent {
@@ -665,9 +726,36 @@ fn extract_readable_text(dom: &obscura_dom::DomTree, node_id: obscura_dom::NodeI
 
     match &node.data {
         NodeData::Text { contents } => {
-            let trimmed = contents.trim();
-            if !trimmed.is_empty() {
-                result.push_str(trimmed);
+            // Browser-faithful inline-text handling: collapse runs of
+            // whitespace to a single space, but PRESERVE any leading /
+            // trailing whitespace so spaces between sibling inline
+            // elements survive. Previously we ran `contents.trim()` and
+            // dropped both ends, which made content built from a
+            // text/link/text triple (a paragraph like
+            // `"Judge ", <a>FullName</a>, " said …"` assembled by a
+            // content script) render as "JudgeFullNamesaid".
+            // CSS whitespace handling isn't perfect here, but for the
+            // article-text use case (the only consumer of `--dump text`)
+            // matching real-browser rendering is what users expect.
+            if contents.is_empty() {
+                // nothing
+            } else {
+                let mut collapsed = String::with_capacity(contents.len());
+                let mut prev_ws = false;
+                for ch in contents.chars() {
+                    if ch.is_whitespace() {
+                        if !prev_ws {
+                            collapsed.push(' ');
+                        }
+                        prev_ws = true;
+                    } else {
+                        collapsed.push(ch);
+                        prev_ws = false;
+                    }
+                }
+                if !collapsed.trim().is_empty() || contents.chars().any(|c| c.is_whitespace()) {
+                    result.push_str(&collapsed);
+                }
             }
         }
         NodeData::Element { name, .. } => {

@@ -256,6 +256,17 @@ Obscura implements the Chrome DevTools Protocol for Puppeteer/Playwright compati
 | **LP** | getMarkdown (DOM-to-Markdown conversion) |
 ## CLI Reference
 
+### Global flags
+
+| Flag | Description |
+|------|-------------|
+| `--proxy <URL>` | HTTP/SOCKS5 proxy applied to every subcommand |
+| `--user-agent <UA>` | Custom User-Agent string |
+| `--v8-flags <FLAGS>` | Raw V8 flags (see *Tuning V8* below) |
+| `--extension <PATH>` | Load a WebExtension bundle (folder, `.zip`, `.xpi`, or `.crx`). See *Browser extensions* below |
+| `--obey-robots` | Respect `robots.txt` |
+| `-v`, `--verbose` | More chatty `tracing` output (also via `RUST_LOG=`) |
+
 ### Tuning V8
 
 Obscura embeds V8 directly. Use `--v8-flags` to pass raw flags through to V8, same syntax as Chromium's `--js-flags` and Node's command-line flags. Most common use is raising the heap cap to fix `JavaScript heap out of memory` on JS-heavy pages:
@@ -360,6 +371,130 @@ Optional flags (both transports):
 | `browser_network_requests` | List network requests made by the current page |
 | `browser_console_messages` | Return console messages logged by the page |
 | `browser_close` | Close the page and reset browser state |
+
+## Browser extensions (WebExtensions)
+
+Obscura ships an experimental host for WebExtensions (`obscura-ext`
+crate). Load an unpacked directory, `.zip`, `.xpi` (Firefox), or
+`.crx` (Chrome) with the global `--extension` flag and Obscura
+emulates enough of the `chrome.*` / `browser.*` API for the
+extension's background scripts and content scripts to run inside the
+page's V8 realm. The full design doc lives at
+[`docs/extensions.md`](docs/extensions.md).
+
+The integration is aimed at MV2 content-script extensions that
+mutate the DOM (read JSON from `<script>` tags, reshape rendered
+content, restyle the page, etc.). MV3 extensions load too, but the
+service-worker lifecycle is not emulated — the background runs as a
+persistent script in the page realm.
+
+### Quick start
+
+```bash
+# Use any unpacked extension, or a packed .zip / .xpi / .crx.
+obscura --extension ./my-extension.xpi \
+        --stealth \
+        fetch https://example.com/article \
+        --dump text --wait-until domcontentloaded
+```
+
+`--wait-until domcontentloaded` is recommended with extensions:
+content scripts mutate the DOM immediately, and skipping the page-
+script phase avoids hydration crashes that would otherwise truncate
+the extracted text on JS-heavy SPAs.
+
+### What's supported
+
+| Surface | Notes |
+|---|---|
+| Manifest V2 (Firefox) | Reference target; `background.scripts` runs as a single concatenated chunk in the page realm |
+| Manifest V3 (Chrome) | Loads; service-worker lifecycle not emulated (background runs as a persistent script) |
+| `chrome.runtime` | `getManifest`, `getURL`, `getPlatformInfo`, `id`, `lastError`, `sendMessage`, `onMessage`, `onInstalled`, `onStartup`, `onConnect`, `openOptionsPage` |
+| `chrome.storage.local` / `.sync` / `.session` | In-memory per page; not persisted across navigations |
+| `chrome.tabs` | `query`, `get`, `getCurrent`, `sendMessage`, `executeScript`, `update`, `create`, `reload`, `onUpdated`, `onActivated` |
+| `chrome.scripting.executeScript` | Loads bundle files into the page realm |
+| `chrome.permissions` | `contains` / `request` / `remove` auto-grant the manifest's host_permissions |
+| `chrome.cookies` | Stub (returns empty); the underlying `CookieJar` is wired to navigation, not extensions |
+| `chrome.webRequest.*` listeners | Register without throwing; do **not** synchronously intercept yet |
+| `chrome.declarativeNetRequest` | Rules accepted, no enforcement yet |
+| `chrome.action` / `chrome.browserAction` | No-op (no UI) |
+| `chrome.management.getSelf` | Returns the loaded manifest's metadata |
+| `chrome.offscreen` | No-op (background already has DOM access in our model) |
+| `chrome.i18n.getMessage` | Returns empty string |
+
+APIs not on this list are present as no-op stubs so the extension's
+startup code doesn't throw — but won't do anything.
+
+### Architecture
+
+Everything (the `chrome` shim, background scripts, content scripts)
+runs in **the same V8 realm as the page**, injected as a preload
+script before page JavaScript executes. There's no second isolate
+for the "background world" and no `tabs` model for multi-page
+extensions — Obscura's one-Page-per-context model maps to a single
+synthetic tab.
+
+`setTimeout` calls made by the extension are intercepted and queued;
+the queue is drained synchronously at the end of the preload so the
+extension's DOM mutations land before Obscura's text/HTML extractor
+walks the page. This trades the original delay-based retry semantics
+for "run everything in flight before returning" — a tradeoff that
+works for snapshot-style fetches and `--wait-until domcontentloaded`.
+
+See [`docs/extensions.md`](docs/extensions.md) for the full design
+write-up, the per-API shim status, and the diagnostic story when an
+extension stops working.
+
+### What's *not* supported (yet)
+
+- `webRequest` blocking listeners do not intercept real traffic — the
+  Rust-side `RequestInterceptor` exists in `obscura-net` but isn't
+  wired to the JS listener registry yet. Sites that need
+  network-level blocking fall back to whatever the content script
+  can do post-load.
+- `declarativeNetRequest` rules are accepted but not enforced.
+- `chrome.storage.local` is in-memory per page; multi-navigation
+  flows lose state.
+- The popup/options page UI is never rendered. Settings that depend
+  on user interaction need to be set programmatically (edit the
+  bundle's data tables ahead of time, or pre-seed storage at
+  startup).
+- One extension at a time; passing `--extension` more than once
+  warns and uses the first.
+
+### Loading a `.crx`
+
+Chrome packages (`.crx`) carry a small header (public key + signature
+for CRX2, or a serialised protobuf header for CRX3) before the zip
+body. Obscura's loader recognises both versions and strips the
+header automatically — no need to manually convert to `.zip`.
+
+### Loading an unpacked source tree
+
+If you've cloned the extension's source repository you can point
+`--extension` at the unpacked directory:
+
+```bash
+obscura --extension ./my-extension-dir fetch <url> --dump text
+```
+
+The loader looks for `manifest.json` at the root.
+
+### Diagnostics
+
+Bring-up traces and failures surface at INFO / ERROR through the
+`obscura::console` target:
+
+```bash
+RUST_LOG=obscura::console=info,obscura_ext=info \
+  obscura --extension ./ext fetch <url> --stealth --dump text 2>&1 \
+  | grep obscura-ext
+```
+
+Look for `obscura-ext: preload starting`, `obscura-ext: drained N
+timers`, and any `obscura-ext: ... failed:` lines. The console
+subtarget also surfaces `console.log` / `console.error` from the
+extension's JS.
 
 ## License
 

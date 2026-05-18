@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use obscura_ext::ExtensionRuntime;
 use obscura_net::{CookieJar, ObscuraHttpClient, RobotsCache};
 
 pub struct BrowserContext {
@@ -21,6 +22,13 @@ pub struct BrowserContext {
     /// the CDP server.
     pub allow_file_access: bool,
     pub storage_dir: Option<PathBuf>,
+    /// Optional loaded WebExtension. When set, every `Page` created from
+    /// this context will inject the extension's background scripts +
+    /// chrome.* shim as a preload script before page JS runs. See the
+    /// `obscura-ext` crate for the host shim that ferries
+    /// `runtime.sendMessage`/`tabs.executeScript`/`storage.local` between
+    /// the extension and the page realm.
+    pub extension: Option<Arc<ExtensionRuntime>>,
 }
 
 impl BrowserContext {
@@ -36,6 +44,13 @@ impl BrowserContext {
         storage_dir: Option<PathBuf>,
     ) -> Self {
         Self::_new_inner(id, None, false, None, storage_dir)
+    }
+
+    /// Attach a loaded WebExtension. Returns `self` for chaining at the
+    /// call site (`BrowserContext::new(...).with_extension(ext)`).
+    pub fn with_extension(mut self, ext: Arc<ExtensionRuntime>) -> Self {
+        self.extension = Some(ext);
+        self
     }
 
     /// Create a BrowserContext with full options including storage_dir.
@@ -102,6 +117,7 @@ impl BrowserContext {
             stealth,
             allow_file_access: false,
             storage_dir,
+            extension: None,
         }
     }
 

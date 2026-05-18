@@ -8,6 +8,7 @@ members = [
     "crates/obscura-js",
     "crates/obscura-mcp",
     "crates/obscura-cli",
+    "crates/obscura-ext",
 ]
 
 [workspace.package]
@@ -23,6 +24,7 @@ obscura-browser = { path = "crates/obscura-browser" }
 obscura-cdp = { path = "crates/obscura-cdp" }
 obscura-js = { path = "crates/obscura-js" }
 obscura-mcp = { path = "crates/obscura-mcp" }
+obscura-ext = { path = "crates/obscura-ext" }
 
 html5ever = "0.29"
 markup5ever = "0.14"
