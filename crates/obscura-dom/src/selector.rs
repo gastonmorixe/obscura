@@ -500,6 +500,31 @@ pub fn parse_selector(selector: &str) -> Result<SelectorList<ObscuraSelector>, S
 
 impl DomTree {
     pub fn query_selector(&self, selector: &str) -> Result<Option<NodeId>, String> {
+        // Default root = document, preserving the historical behaviour
+        // of the Rust-side API and the CDP `DOM.querySelector` entrypoint.
+        self.query_selector_within(self.document(), selector)
+    }
+
+    pub fn query_selector_all(&self, selector: &str) -> Result<Vec<NodeId>, String> {
+        self.query_selector_all_within(self.document(), selector)
+    }
+
+    /// `query_selector` scoped to `root`'s descendants. Mirrors the DOM
+    /// spec's `Element.querySelector` behaviour: only nodes that descend
+    /// from `root` (in the order html5ever inserted them) are considered.
+    /// Previously the JS-facing `Element.prototype.querySelector` aliased
+    /// to the document-wide variant, so calling `someDiv.querySelector('p')`
+    /// would silently miss `<p>` elements that lived under `someDiv` but
+    /// were created via `innerHTML =` on a detached node (the parser
+    /// attaches them to `someDiv`, not to `document`). Browsers — and
+    /// every content script that calls `wrapper.querySelector(...)`
+    /// after `wrapper.innerHTML = html` — expect the receiver-scoped
+    /// variant.
+    pub fn query_selector_within(
+        &self,
+        root: NodeId,
+        selector: &str,
+    ) -> Result<Option<NodeId>, String> {
         let selector_list = parse_selector(selector)?;
         let mut caches = selectors::context::SelectorCaches::default();
         let mut context = MatchingContext::new(
@@ -511,8 +536,15 @@ impl DomTree {
             MatchingForInvalidation::No,
         );
 
-        let doc = self.document();
-        for desc_id in self.descendants(doc) {
+        for desc_id in self.descendants(root) {
+            // `descendants` includes `root` itself; per the spec only
+            // strict descendants count for `element.querySelector`. The
+            // historical document-wide path used `document()` as root,
+            // and document nodes never match an element selector, so
+            // this filter is only meaningful when `root` is an element.
+            if desc_id == root {
+                continue;
+            }
             let is_element = self.with_node(desc_id, |n| n.is_element()).unwrap_or(false);
             if is_element {
                 let element = DomElement::new(self, desc_id);
@@ -528,7 +560,13 @@ impl DomTree {
         Ok(None)
     }
 
-    pub fn query_selector_all(&self, selector: &str) -> Result<Vec<NodeId>, String> {
+    /// `query_selector_all` scoped to `root`'s descendants. See
+    /// [`query_selector_within`] for the rationale.
+    pub fn query_selector_all_within(
+        &self,
+        root: NodeId,
+        selector: &str,
+    ) -> Result<Vec<NodeId>, String> {
         let selector_list = parse_selector(selector)?;
         let mut caches = selectors::context::SelectorCaches::default();
         let mut context = MatchingContext::new(
@@ -541,8 +579,10 @@ impl DomTree {
         );
         let mut results = Vec::new();
 
-        let doc = self.document();
-        for desc_id in self.descendants(doc) {
+        for desc_id in self.descendants(root) {
+            if desc_id == root {
+                continue;
+            }
             let is_element = self.with_node(desc_id, |n| n.is_element()).unwrap_or(false);
             if is_element {
                 let element = DomElement::new(self, desc_id);

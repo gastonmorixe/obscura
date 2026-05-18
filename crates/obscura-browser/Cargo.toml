@@ -11,6 +11,7 @@ stealth = ["obscura-net/stealth"]
 obscura-dom = { workspace = true }
 obscura-net = { workspace = true }
 obscura-js = { workspace = true }
+obscura-ext = { workspace = true }
 tokio = { workspace = true }
 futures = "0.3"
 url = { workspace = true }
