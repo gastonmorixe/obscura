@@ -9,6 +9,10 @@ private/
 # Network-trace dump directory produced by local test tooling.
 .net-dbg/
 
+# Local scratch: logs from interactive runs, ad-hoc HAR exports, etc.
+.logs/
+tmp/
+
 # Editor / OS noise.
 *.swp
 .idea/
