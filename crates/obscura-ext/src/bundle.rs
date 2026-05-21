@@ -90,46 +90,64 @@ impl Bundle {
         let reader = std::io::Cursor::new(bytes);
         let mut zip = zip::ZipArchive::new(reader)?;
         let mut files: HashMap<String, Vec<u8>> = HashMap::new();
-        let mut manifest_json: Option<String> = None;
         for i in 0..zip.len() {
             let mut entry = zip.by_index(i)?;
             if entry.is_dir() {
                 continue;
             }
-            // Strip an optional single top-level directory. GitHub-style
-            // source archives wrap everything in `<repo>-<branch>/`,
-            // while signed .xpi / .crx packages do not. We canonicalise
-            // on the location of `manifest.json`.
             let raw_name = entry
                 .enclosed_name()
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_else(|| entry.name().to_string());
             let mut buf = Vec::new();
             entry.read_to_end(&mut buf)?;
-            if raw_name.ends_with("manifest.json")
-                && raw_name.matches('/').count() <= 1
-                && manifest_json.is_none()
-            {
-                manifest_json = Some(String::from_utf8_lossy(&buf).into_owned());
-            }
             files.insert(raw_name, buf);
         }
-        let manifest_json = manifest_json.ok_or(BundleError::Manifest(ManifestError::Missing))?;
+
+        // Pick the canonical `manifest.json`.
+        //
+        // Some real-world bundles ship MORE THAN ONE `manifest.json`:
+        // GitHub-style source archives wrap everything in
+        // `<repo>-<branch>/manifest.json`, signed `.xpi` / `.crx`
+        // packages put it at the root, and a few extensions (notably
+        // Bypass Paywalls Clean) embed a second mini-bundle under
+        // `custom/manifest.json` that overlays the primary one.
+        //
+        // We canonicalise on the SHALLOWEST manifest — root wins over
+        // any sub-directory. Ties broken by lexicographic path order
+        // for determinism. The previous heuristic ("first hit, two
+        // independent passes through a `HashMap`") was non-deterministic
+        // across HashMap seedings: ~50% of runs picked the deeper
+        // `custom/manifest.json`, then stripped `custom/` from every
+        // key — which dropped most of the bundle and silently
+        // disabled the extension. See `picks_shallowest_manifest`.
+        let chosen_manifest_path = files
+            .keys()
+            .filter(|k| k.ends_with("manifest.json") && (k.as_str() == "manifest.json" || k.contains('/')))
+            .min_by(|a, b| {
+                let da = a.matches('/').count();
+                let db = b.matches('/').count();
+                da.cmp(&db).then_with(|| a.cmp(b))
+            })
+            .cloned()
+            .ok_or(BundleError::Manifest(ManifestError::Missing))?;
+
+        let manifest_bytes = files
+            .get(&chosen_manifest_path)
+            .ok_or(BundleError::Manifest(ManifestError::Missing))?;
+        let manifest_json = String::from_utf8_lossy(manifest_bytes).into_owned();
         let manifest = ExtensionManifest::parse(&manifest_json)?;
 
-        // Figure out the prefix that hides the actual extension root and
-        // strip it. We find the depth at which `manifest.json` sits and
-        // strip that many path components from every key.
-        let prefix = files
-            .keys()
-            .find(|k| k.ends_with("manifest.json"))
-            .map(|k| {
-                if let Some(idx) = k.rfind("manifest.json") {
-                    k[..idx].to_string()
-                } else {
-                    String::new()
-                }
-            })
+        // Strip the chosen manifest's parent directory from every key
+        // so that paths in the registry match what the manifest
+        // references (e.g. `background.js`, not
+        // `bypass-paywalls-firefox-clean-master/background.js`). We
+        // reuse the EXACT path we parsed the manifest from — never
+        // re-discover it from the keys collection — so the prefix is
+        // guaranteed consistent with the chosen manifest.
+        let prefix = chosen_manifest_path
+            .rsplit_once('/')
+            .map(|(parent, _)| format!("{parent}/"))
             .unwrap_or_default();
         let files = if prefix.is_empty() {
             files
@@ -347,5 +365,82 @@ mod tests {
             Bundle::load(&path),
             Err(BundleError::Unsupported(_))
         ));
+    }
+
+    /// Build a bundle that embeds a SECOND `manifest.json` under a
+    /// `custom/` sub-directory. The shape mirrors Bypass Paywalls
+    /// Clean's `.xpi`, which ships a primary manifest at the root and a
+    /// stripped-down overlay manifest at `custom/manifest.json`.
+    ///
+    /// We run the load 32 times in a row to exercise HashMap iteration
+    /// non-determinism (which was the underlying source of the
+    /// "sometimes the extension does nothing" symptom). The fix selects
+    /// the SHALLOWEST manifest deterministically, so every load must
+    /// pick the root manifest and see every bundled file.
+    #[test]
+    fn picks_shallowest_manifest_when_multiple_present() {
+        fn build() -> Vec<u8> {
+            let mut buf = std::io::Cursor::new(Vec::new());
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            // Root manifest — the real one. Two background scripts.
+            let root_manifest = r#"{
+                "manifest_version": 2,
+                "name": "Multi",
+                "version": "1.0",
+                "background": { "scripts": ["sites.js", "background.js"] },
+                "permissions": ["cookies", "*://*.example.com/*"]
+            }"#;
+            zip.start_file("manifest.json", opts).unwrap();
+            zip.write_all(root_manifest.as_bytes()).unwrap();
+            zip.start_file("sites.js", opts).unwrap();
+            zip.write_all(b"var defaultSites = {};").unwrap();
+            zip.start_file("background.js", opts).unwrap();
+            zip.write_all(b"console.log('bg');").unwrap();
+            zip.start_file("contentScript.js", opts).unwrap();
+            zip.write_all(b"// cs").unwrap();
+            // Overlay manifest under custom/ — narrower scope, no host gate.
+            let custom_manifest = r#"{
+                "manifest_version": 2,
+                "name": "Multi (custom)",
+                "version": "1.0",
+                "background": { "scripts": ["sites.js", "background.js"] },
+                "permissions": ["cookies", "*://*/*"]
+            }"#;
+            zip.start_file("custom/manifest.json", opts).unwrap();
+            zip.write_all(custom_manifest.as_bytes()).unwrap();
+            zip.start_file("custom/sites_custom.json", opts).unwrap();
+            zip.write_all(b"{}").unwrap();
+            zip.finish().unwrap();
+            buf.into_inner()
+        }
+
+        let dir = tempdir::TempDir::new("obscura-ext-test").unwrap();
+        let path = dir.path().join("multi.xpi");
+        std::fs::write(&path, build()).unwrap();
+
+        // 32 reloads in one process don't reseed HashMap, but the
+        // selector itself must not depend on iteration order. We also
+        // re-run in a fresh sub-process loop in CI; this in-process
+        // loop catches any "first key wins" regressions.
+        for i in 0..32 {
+            let bundle = Bundle::load(&path).unwrap_or_else(|e| panic!("iter {i}: {e}"));
+            assert_eq!(bundle.manifest.name, "Multi", "iter {i}: wrong manifest");
+            assert_eq!(
+                bundle.manifest.host_patterns,
+                vec!["*://*.example.com/*"],
+                "iter {i}: wrong host patterns (overlay manifest was chosen)"
+            );
+            assert!(bundle.has("sites.js"), "iter {i}: sites.js missing");
+            assert!(bundle.has("background.js"), "iter {i}: background.js missing");
+            assert!(bundle.has("contentScript.js"), "iter {i}: contentScript.js missing");
+            // The overlay manifest survives at its original path —
+            // we don't strip `custom/` away.
+            assert!(
+                bundle.has("custom/manifest.json"),
+                "iter {i}: custom/ overlay missing"
+            );
+        }
     }
 }
