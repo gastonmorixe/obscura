@@ -279,7 +279,11 @@ impl Page {
                     url
                 );
                 if let Some(js) = &mut self.js {
-                    if let Err(e) = js.execute_script("<obscura-ext:preload>", &preload) {
+                    // Extension preload code is user-controlled; run it under
+                    // the watchdog so a runaway `for(;;){}` or a recursive
+                    // microtask chain can't wedge navigation. See bug postmortem
+                    // 2026-05-19 (orphan obscura at 99% CPU in PromiseFulfillReactionJob).
+                    if let Err(e) = js.execute_script_guarded("<obscura-ext:preload>", &preload) {
                         tracing::warn!("obscura-ext: preload script failed: {e}");
                     }
                 }
@@ -445,7 +449,7 @@ impl Page {
         // Scripts that check readyState === 'loading' will register DOMContentLoaded
         // listeners instead of calling their callback immediately.
         if let Some(js) = &mut self.js {
-            let _ = js.execute_script("<ready-state>", "globalThis.__documentReadyState__ = 'loading';");
+            let _ = js.execute_script_guarded("<ready-state>", "globalThis.__documentReadyState__ = 'loading';");
         }
 
         for (i, script) in all_to_execute.iter().enumerate() {
@@ -503,7 +507,16 @@ impl Page {
         if let Some(js) = &mut self.js {
             // Spec order: readyState -> interactive, fire DOMContentLoaded on both
             // document and window, then readyState -> complete, fire load.
-            let _ = js.execute_script("<load-events>",
+            //
+            // CRITICAL: must be guarded. dispatchEvent runs page-installed
+            // listeners synchronously, and on return V8 drains the microtask
+            // queue (Promise reactions registered by those listeners). A page
+            // whose load handler installs a recursive promise chain — or one
+            // that throws on every microtask and re-enters via .catch — will
+            // spin V8 forever inside FireCallCompletedCallbackInternal. This
+            // was the root cause of the 2026-05-19 orphan obscura at 99% CPU
+            // on interactivebrokers.github.io/tws-api/tick_types.html.
+            let _ = js.execute_script_guarded("<load-events>",
                 "globalThis.__documentReadyState__ = 'interactive';\n\
                  try { document.dispatchEvent(new Event('DOMContentLoaded', {bubbles:false,cancelable:false})); } catch(e) {}\n\
                  try { window.dispatchEvent(new Event('DOMContentLoaded', {bubbles:false,cancelable:false})); } catch(e) {}\n\
@@ -785,11 +798,15 @@ impl Page {
                 // arbitrary JS in the page's V8 realm.
                 let escaped = escape_for_js_template_literal(&combined_css);
                 let code = format!("globalThis.__obscura_css = `{}`;", escaped);
-                let _ = js.execute_script("<css>", &code);
+                let _ = js.execute_script_guarded("<css>", &code);
             }
         }
         if let Some(js) = &mut self.js {
-            let _ = js.execute_script("<iframe-load>",
+            // Guarded: walks the DOM and calls a host-binding per iframe.
+            // A maliciously-crafted DOM with millions of iframes, or a
+            // host-binding implementation that re-enters into JS, could in
+            // principle spin past the watchdog deadline.
+            let _ = js.execute_script_guarded("<iframe-load>",
                 "(function() { var iframes = document.querySelectorAll('iframe[src]'); for (var i = 0; i < iframes.length; i++) { var src = iframes[i].getAttribute('src'); if (src && src !== 'about:blank') iframes[i]._loadIframeSrc(src); } })()");
         }
 
@@ -1015,7 +1032,11 @@ impl Page {
 
     pub fn execute_preload_script(&mut self, source: &str) -> Result<(), String> {
         if let Some(js) = &mut self.js {
-            js.execute_script("<preload>", source)
+            // Preload scripts are user-supplied (CLI/extension/CDP injection),
+            // so they get the watchdog. The contract — Ok(()) means "ran to
+            // completion OR was terminated cleanly" — is preserved by
+            // execute_script_guarded.
+            js.execute_script_guarded("<preload>", source)
         } else {
             Err("No JS runtime".to_string())
         }

@@ -489,11 +489,17 @@ impl ObscuraJsRuntime {
     }
 
     pub fn execute_script_guarded(&mut self, _name: &str, source: &str) -> Result<(), String> {
-        if source.len() < 10_000 {
-            self.execute_script(_name, source)
-        } else {
-            self.execute_script_with_timeout(source, std::time::Duration::from_secs(5))
-        }
+        // Always arm the watchdog. Source size is unrelated to runaway risk:
+        // a 50-byte `for(;;){}` or a 3-line promise chain hangs V8 just as
+        // hard as a 50KB script. The threshold gate the old code used was a
+        // long-standing false-economy (skipping the watchdog to save the
+        // thread spawn) that left the unguarded path open to wedges in
+        // user-script callback graphs (load handlers, microtask reactions).
+        // The kill mechanism (`isolate_handle.terminate_execution()`) plus
+        // the post-kill `<reset>` script in `execute_script_with_timeout`
+        // returns `Ok(())` for terminated scripts, so callers see the same
+        // contract whether the script ran to completion or got killed.
+        self.execute_script_with_timeout(source, std::time::Duration::from_secs(5))
     }
 
     pub fn execute_script_with_timeout(
