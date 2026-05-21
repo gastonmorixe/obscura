@@ -1295,7 +1295,7 @@ function _registerIframe(iframeEl) {
   });
 }
 globalThis.navigator = {
-  get userAgent() { return globalThis.__obscura_ua || "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"; },
+  get userAgent() { return globalThis.__obscura_ua || "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"; },
   get appVersion() { return this.userAgent.replace('Mozilla/', ''); },
   language: "en-US", languages: ["en-US","en"], platform: "MacIntel",
   onLine: true, cookieEnabled: true, hardwareConcurrency: 8,
@@ -1329,14 +1329,18 @@ globalThis.navigator = {
     return m;
   },
   userAgentData: {
-    // Brand list must match what wreq-util's Chrome147 macOS profile sends in
-    // the `sec-ch-ua` header (`"Google Chrome";v="147", "Not.A/Brand";v="8",
-    // "Chromium";v="147"`) — PerimeterX cross-checks the wire header against
-    // navigator.userAgentData.brands during its JS challenge.
+    // Brand list must match what the wire `sec-ch-ua` header advertises
+    // on every initial hop. The stealth path overrides this in
+    // `crates/obscura-net/src/wreq_client.rs` (`STEALTH_SEC_CH_UA`), and
+    // the non-stealth path emits the same value in `client.rs`. Chrome
+    // 148 dropped the "Google Chrome" brand and switched to a 2-brand
+    // GREASE format (`"Not/A)Brand";v="99", "Chromium";v="148"`).
+    // PerimeterX/HUMAN cross-check the wire header against
+    // `navigator.userAgentData.brands` during the JS challenge, so any
+    // drift between these three surfaces is an immediate bot signal.
     brands: [
-      {brand: "Google Chrome", version: "147"},
-      {brand: "Not.A/Brand", version: "8"},
-      {brand: "Chromium", version: "147"},
+      {brand: "Not/A)Brand", version: "99"},
+      {brand: "Chromium", version: "148"},
     ],
     mobile: false,
     platform: "macOS",
@@ -1344,13 +1348,13 @@ globalThis.navigator = {
       return Promise.resolve({
         architecture: "arm",
         bitness: "64",
-        brands: [{brand:"Google Chrome",version:"147"},{brand:"Not.A/Brand",version:"8"},{brand:"Chromium",version:"147"}],
-        fullVersionList: [{brand:"Google Chrome",version:"147.0.0.0"},{brand:"Not.A/Brand",version:"8.0.0.0"},{brand:"Chromium",version:"147.0.0.0"}],
+        brands: [{brand:"Not/A)Brand",version:"99"},{brand:"Chromium",version:"148"}],
+        fullVersionList: [{brand:"Not/A)Brand",version:"99.0.0.0"},{brand:"Chromium",version:"148.0.0.0"}],
         mobile: false,
         model: "",
         platform: "macOS",
         platformVersion: "15.5.0",
-        uaFullVersion: "147.0.0.0",
+        uaFullVersion: "148.0.0.0",
       });
     },
     toJSON() { return {brands:this.brands,mobile:this.mobile,platform:this.platform}; },

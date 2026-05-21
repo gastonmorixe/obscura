@@ -192,7 +192,7 @@ impl ObscuraHttpClient {
             proxy_url: proxy_url.map(|s| s.to_string()),
             cookie_jar,
             user_agent: RwLock::new(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36".to_string(),
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36".to_string(),
             ),
             extra_headers: RwLock::new(HashMap::new()),
             interceptor: RwLock::new(None),
@@ -302,7 +302,7 @@ impl ObscuraHttpClient {
             let ua = self.user_agent.read().await.clone();
             let mut headers = HeaderMap::new();
             headers.insert(USER_AGENT, HeaderValue::from_str(&ua).unwrap_or_else(|_| {
-                HeaderValue::from_static("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36")
+                HeaderValue::from_static("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36")
             }));
             headers.insert(
                 reqwest::header::ACCEPT,
@@ -314,12 +314,16 @@ impl ObscuraHttpClient {
             );
             headers.insert(
                 HeaderName::from_static("sec-ch-ua"),
-                // Brand list mirrors wreq-util 3.0.0-rc.11's Chrome147 macOS profile
-                // so the non-stealth path produces the same Client Hints surface
-                // as `--stealth`. Keep these three lines, the JS-layer
-                // `navigator.userAgentData.brands`, and the wreq emulation profile
-                // version-locked together (see bootstrap.js:1191 + wreq_client.rs).
-                HeaderValue::from_static("\"Google Chrome\";v=\"147\", \"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"147\""),
+                // Brand list matches what the --stealth wreq path overrides
+                // onto every request (STEALTH_SEC_CH_UA in wreq_client.rs) so
+                // both paths produce the same Client Hints surface, and what
+                // the bootstrap.js JS layer reports through
+                // `navigator.userAgentData.brands` so PerimeterX's JS challenge
+                // cross-check passes. Chrome 148 dropped the "Google Chrome"
+                // brand and emits a 2-brand GREASE format. Keep these three
+                // surfaces (wreq override + this static + bootstrap.js)
+                // version-locked.
+                HeaderValue::from_static("\"Not/A)Brand\";v=\"99\", \"Chromium\";v=\"148\""),
             );
             headers.insert(
                 HeaderName::from_static("sec-ch-ua-mobile"),
@@ -348,6 +352,32 @@ impl ObscuraHttpClient {
             headers.insert(
                 HeaderName::from_static("upgrade-insecure-requests"),
                 HeaderValue::from_static("1"),
+            );
+            // Chrome 124+ ships `priority: u=0, i` on every document GET,
+            // and Chrome incognito always ships `cache-control: no-cache`
+            // plus `pragma: no-cache` on top-level navigations. All three
+            // are PerimeterX/HUMAN scoring signals when absent. The wire
+            // `accept-encoding` is left to reqwest's gzip/brotli/deflate
+            // feature defaults — we do NOT advertise `zstd` because
+            // reqwest is not built with the zstd decompressor. The
+            // stealth path in `wreq_client.rs` also leaves
+            // accept-encoding to wreq-util's emulation default (gzip,
+            // deflate, br) for the same reason: setting accept-encoding
+            // manually disables wreq's response-body auto-decompression
+            // and turns a 200 OK into un-decompressed bytes the dump
+            // pipeline cannot parse. See the long-form comment in
+            // wreq_client.rs::fetch for the full reasoning.
+            headers.insert(
+                HeaderName::from_static("priority"),
+                HeaderValue::from_static("u=0, i"),
+            );
+            headers.insert(
+                HeaderName::from_static("cache-control"),
+                HeaderValue::from_static("no-cache"),
+            );
+            headers.insert(
+                HeaderName::from_static("pragma"),
+                HeaderValue::from_static("no-cache"),
             );
 
             let cookie_header = self.cookie_jar.get_cookie_header(&current_url);

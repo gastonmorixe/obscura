@@ -19,7 +19,20 @@ use crate::client::{Response, ObscuraNetError};
 
 #[cfg(feature = "stealth")]
 pub const STEALTH_USER_AGENT: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
+
+/// Chrome 148's `sec-ch-ua` brand list. Chrome 148 dropped the
+/// `"Google Chrome";v="…"` brand that earlier versions emitted and
+/// switched to a 2-brand GREASE format. wreq-util 3.0.0-rc.11's
+/// Chrome147 macro still emits the old 3-brand shape, so we override on
+/// every initial hop (and the non-stealth path mirrors this constant
+/// in `client.rs`).
+///
+/// Source: live Chrome 148.0.0.0 macOS HAR captured 2026-05-21 (see
+/// `tmp/2-www.bloomberg.com.har`, top-level GET on
+/// www.bloomberg.com).
+#[cfg(feature = "stealth")]
+pub const STEALTH_SEC_CH_UA: &str = "\"Not/A)Brand\";v=\"99\", \"Chromium\";v=\"148\"";
 
 #[cfg(feature = "stealth")]
 pub struct StealthHttpClient {
@@ -44,17 +57,28 @@ impl StealthHttpClient {
         let cert_store = wreq::tls::CertStore::default();
 
         // Emulation profile:
-        //   * Chrome147 is the freshest variant wreq-util 3.0.0-rc.11 ships (live
-        //     Chrome stable is 149 as of 2026-05; wreq-util tracks one or two
-        //     minor versions behind).
-        //   * MacOS is intentional: most desktop visitors hit Bloomberg/PerimeterX
-        //     from macOS or Windows. Linux Chrome is a much rarer fingerprint and
-        //     gets scored harder by PX. Picking macOS keeps the UA, sec-ch-ua-
-        //     platform, and (downstream) `navigator.platform` consistent for the
-        //     common case. Note: wreq-util still reuses the v132 TLS+H2 build for
-        //     every Chrome 132..=147 profile, so this isn't a TLS-fingerprint
-        //     upgrade — only headers + UA. If PX starts blocking v132 ClientHello
-        //     bytes wholesale we'll need a more recent wreq-util.
+        //   * Chrome147 is the freshest variant wreq-util 3.0.0-rc.11 ships
+        //     (live Chrome stable is 148+ as of 2026-05). We keep the TLS+H2
+        //     fingerprint that wreq-util computes for Chrome147 and override
+        //     the *wire headers* below to look like Chrome 148: that's what
+        //     PerimeterX/HUMAN actually scores on for the top-level
+        //     navigation. The header overrides are: sec-ch-ua brand list
+        //     (148 dropped "Google Chrome"), user-agent string, priority
+        //     (Chrome 124+ ships this on every document GET), accept-
+        //     encoding (Chrome 121+ ships zstd), cache-control + pragma
+        //     (incognito-mode signal), plus the previous pass's accept,
+        //     sec-fetch-user and upgrade-insecure-requests.
+        //   * MacOS is intentional: most desktop visitors hit
+        //     Bloomberg/PerimeterX from macOS or Windows. Linux Chrome is
+        //     a much rarer fingerprint and gets scored harder by PX.
+        //     Picking macOS keeps the UA, sec-ch-ua-platform, and
+        //     (downstream) `navigator.platform` consistent for the common
+        //     case.
+        //   * Note: wreq-util still reuses the v132 TLS+H2 build for every
+        //     Chrome 132..=147 profile, so the JA3/JA4 fingerprint here is
+        //     v132's. If PX starts blocking v132 ClientHello bytes
+        //     wholesale we'll need a fresher wreq-util release or to pin a
+        //     different Emulation profile per target.
         let emulation_opts = wreq_util::EmulationOption::builder()
             .emulation(wreq_util::Emulation::Chrome147)
             .emulation_os(wreq_util::EmulationOS::MacOS)
@@ -89,23 +113,56 @@ impl StealthHttpClient {
         for hop in 0..20 {
             let mut req = self.client.get(current_url.as_str());
 
-            // wreq-util's Chrome emulation injects sec-ch-ua, sec-ch-ua-mobile,
-            // sec-ch-ua-platform, sec-fetch-dest, sec-fetch-mode, sec-fetch-site,
-            // user-agent, accept, accept-encoding, accept-language, and priority
-            // — but NOT `sec-fetch-user` or `upgrade-insecure-requests`, which
-            // real Chrome sends on every top-level user-initiated navigation.
-            // Their absence is one of the easier tells for PerimeterX-class
-            // bot management (see Bloomberg 2026-05 block postmortem).
+            // wreq-util's Chrome147 emulation injects sec-ch-ua,
+            // sec-ch-ua-mobile, sec-ch-ua-platform, sec-fetch-dest,
+            // sec-fetch-mode, sec-fetch-site, user-agent, accept,
+            // accept-encoding, and accept-language — but the values it
+            // picks are stale relative to live Chrome 148 and several
+            // headers Chrome sends on every top-level navigation are
+            // absent. Captured 200 OK from real Chrome 148.0.0.0 macOS
+            // hitting Bloomberg (tmp/2-www.bloomberg.com.har) showed:
             //
-            // Also override `accept` so its signed-exchange q-value matches what
-            // live Chrome ships (0.7, not the 0.9 baked into wreq-util's macro).
+            //   accept:            …;v=b3;q=0.7         (wreq-util: q=0.9)
+            //   cache-control:     no-cache             (wreq-util: absent)
+            //   pragma:            no-cache             (wreq-util: absent)
+            //   priority:          u=0, i               (wreq-util: absent)
+            //   sec-ch-ua:         "Not/A)Brand";v="99", "Chromium";v="148"
+            //                      (wreq-util: 3-brand format with "Google
+            //                       Chrome";v="147" — dropped in 148)
+            //   sec-fetch-user:    ?1                   (wreq-util: absent)
+            //   upgrade-insecure-requests: 1            (wreq-util: absent)
+            //   user-agent:        …Chrome/148.0.0.0…   (wreq-util: 147)
             //
-            // `hop == 0` is the initial navigation; subsequent hops are redirect
-            // follow-ups where Chrome flips `sec-fetch-site` from `none` to
-            // `same-origin`/`same-site`/`cross-site` and drops `sec-fetch-user`.
-            // We can't tell the precise site relationship without extra plumbing,
-            // so on redirects we only add `upgrade-insecure-requests` and let
-            // wreq-util's defaults stand for the fetch metadata.
+            // Each absence or version mismatch is a PerimeterX/HUMAN
+            // scoring signal. We override the full set on the initial
+            // hop. On redirect follow-ups Chrome flips `sec-fetch-site`
+            // from `none` to `same-origin`/`same-site`/`cross-site`,
+            // drops `sec-fetch-user`, and keeps `priority` /
+            // `upgrade-insecure-requests` / `cache-control` / `pragma`
+            // (when the user reloaded with no-cache). We can't tell the
+            // precise site relationship without extra plumbing, so on
+            // redirects we only re-assert the encoding + version
+            // identity overrides and let wreq-util's fetch metadata
+            // stand.
+            //
+            // NB: real Chrome 148 also ships `accept-encoding: gzip,
+            // deflate, br, zstd`. We do NOT override `accept-encoding`
+            // here. Setting it manually disables wreq's response-body
+            // auto-decompression for any encoding the server picks,
+            // turning what looks like a 200 OK into a stream of
+            // un-decompressed bytes the dump pipeline can't parse. The
+            // emulation's `gzip,deflate,br` (no zstd) advertisement is
+            // therefore the remaining drift versus live Chrome 148.
+            // Bloomberg's PerimeterX accepts it as of 2026-05; if a
+            // future PX rev starts scoring zstd presence, the right
+            // move is a fresher wreq-util that bakes zstd into its
+            // Chrome emulation accept-encoding (still server-side
+            // advertised, still auto-decompressed) rather than another
+            // header override here.
+            req = req
+                .header("sec-ch-ua", STEALTH_SEC_CH_UA)
+                .header("user-agent", STEALTH_USER_AGENT)
+                .header("upgrade-insecure-requests", "1");
             if hop == 0 {
                 req = req
                     .header(
@@ -114,10 +171,10 @@ impl StealthHttpClient {
                          image/avif,image/webp,image/apng,*/*;q=0.8,\
                          application/signed-exchange;v=b3;q=0.7",
                     )
-                    .header("sec-fetch-user", "?1")
-                    .header("upgrade-insecure-requests", "1");
-            } else {
-                req = req.header("upgrade-insecure-requests", "1");
+                    .header("cache-control", "no-cache")
+                    .header("pragma", "no-cache")
+                    .header("priority", "u=0, i")
+                    .header("sec-fetch-user", "?1");
             }
 
             let cookie_header = self.cookie_jar.get_cookie_header(&current_url);
