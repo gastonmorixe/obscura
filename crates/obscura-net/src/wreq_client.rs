@@ -19,7 +19,7 @@ use crate::client::{Response, ObscuraNetError};
 
 #[cfg(feature = "stealth")]
 pub const STEALTH_USER_AGENT: &str =
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36";
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
 
 #[cfg(feature = "stealth")]
 pub struct StealthHttpClient {
@@ -43,9 +43,21 @@ impl StealthHttpClient {
         // (`webpki-root-certs`), which works the same on every platform.
         let cert_store = wreq::tls::CertStore::default();
 
+        // Emulation profile:
+        //   * Chrome147 is the freshest variant wreq-util 3.0.0-rc.11 ships (live
+        //     Chrome stable is 149 as of 2026-05; wreq-util tracks one or two
+        //     minor versions behind).
+        //   * MacOS is intentional: most desktop visitors hit Bloomberg/PerimeterX
+        //     from macOS or Windows. Linux Chrome is a much rarer fingerprint and
+        //     gets scored harder by PX. Picking macOS keeps the UA, sec-ch-ua-
+        //     platform, and (downstream) `navigator.platform` consistent for the
+        //     common case. Note: wreq-util still reuses the v132 TLS+H2 build for
+        //     every Chrome 132..=147 profile, so this isn't a TLS-fingerprint
+        //     upgrade — only headers + UA. If PX starts blocking v132 ClientHello
+        //     bytes wholesale we'll need a more recent wreq-util.
         let emulation_opts = wreq_util::EmulationOption::builder()
-            .emulation(wreq_util::Emulation::Chrome145)
-            .emulation_os(wreq_util::EmulationOS::Linux)
+            .emulation(wreq_util::Emulation::Chrome147)
+            .emulation_os(wreq_util::EmulationOS::MacOS)
             .build();
 
         let mut builder = wreq::Client::builder()
@@ -74,8 +86,39 @@ impl StealthHttpClient {
         let mut current_url = url.clone();
         let mut redirects = Vec::new();
 
-        for _ in 0..20 {
+        for hop in 0..20 {
             let mut req = self.client.get(current_url.as_str());
+
+            // wreq-util's Chrome emulation injects sec-ch-ua, sec-ch-ua-mobile,
+            // sec-ch-ua-platform, sec-fetch-dest, sec-fetch-mode, sec-fetch-site,
+            // user-agent, accept, accept-encoding, accept-language, and priority
+            // — but NOT `sec-fetch-user` or `upgrade-insecure-requests`, which
+            // real Chrome sends on every top-level user-initiated navigation.
+            // Their absence is one of the easier tells for PerimeterX-class
+            // bot management (see Bloomberg 2026-05 block postmortem).
+            //
+            // Also override `accept` so its signed-exchange q-value matches what
+            // live Chrome ships (0.7, not the 0.9 baked into wreq-util's macro).
+            //
+            // `hop == 0` is the initial navigation; subsequent hops are redirect
+            // follow-ups where Chrome flips `sec-fetch-site` from `none` to
+            // `same-origin`/`same-site`/`cross-site` and drops `sec-fetch-user`.
+            // We can't tell the precise site relationship without extra plumbing,
+            // so on redirects we only add `upgrade-insecure-requests` and let
+            // wreq-util's defaults stand for the fetch metadata.
+            if hop == 0 {
+                req = req
+                    .header(
+                        "accept",
+                        "text/html,application/xhtml+xml,application/xml;q=0.9,\
+                         image/avif,image/webp,image/apng,*/*;q=0.8,\
+                         application/signed-exchange;v=b3;q=0.7",
+                    )
+                    .header("sec-fetch-user", "?1")
+                    .header("upgrade-insecure-requests", "1");
+            } else {
+                req = req.header("upgrade-insecure-requests", "1");
+            }
 
             let cookie_header = self.cookie_jar.get_cookie_header(&current_url);
             if !cookie_header.is_empty() {

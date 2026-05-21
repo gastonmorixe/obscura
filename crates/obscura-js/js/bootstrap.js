@@ -1295,9 +1295,9 @@ function _registerIframe(iframeEl) {
   });
 }
 globalThis.navigator = {
-  get userAgent() { return globalThis.__obscura_ua || "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"; },
+  get userAgent() { return globalThis.__obscura_ua || "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"; },
   get appVersion() { return this.userAgent.replace('Mozilla/', ''); },
-  language: "en-US", languages: ["en-US","en"], platform: "Linux x86_64",
+  language: "en-US", languages: ["en-US","en"], platform: "MacIntel",
   onLine: true, cookieEnabled: true, hardwareConcurrency: 8,
   maxTouchPoints: 0,
   vendor: "Google Inc.", product: "Gecko", productSub: "20030107",
@@ -1329,24 +1329,28 @@ globalThis.navigator = {
     return m;
   },
   userAgentData: {
+    // Brand list must match what wreq-util's Chrome147 macOS profile sends in
+    // the `sec-ch-ua` header (`"Google Chrome";v="147", "Not.A/Brand";v="8",
+    // "Chromium";v="147"`) — PerimeterX cross-checks the wire header against
+    // navigator.userAgentData.brands during its JS challenge.
     brands: [
-      {brand: "Google Chrome", version: "145"},
-      {brand: "Chromium", version: "145"},
-      {brand: "Not=A?Brand", version: "24"},
+      {brand: "Google Chrome", version: "147"},
+      {brand: "Not.A/Brand", version: "8"},
+      {brand: "Chromium", version: "147"},
     ],
     mobile: false,
-    platform: "Linux",
+    platform: "macOS",
     getHighEntropyValues(hints) {
       return Promise.resolve({
-        architecture: "x86",
+        architecture: "arm",
         bitness: "64",
-        brands: [{brand:"Google Chrome",version:"145"},{brand:"Chromium",version:"145"},{brand:"Not=A?Brand",version:"24"}],
-        fullVersionList: [{brand:"Google Chrome",version:"145.0.0.0"},{brand:"Chromium",version:"145.0.0.0"},{brand:"Not=A?Brand",version:"24.0.0.0"}],
+        brands: [{brand:"Google Chrome",version:"147"},{brand:"Not.A/Brand",version:"8"},{brand:"Chromium",version:"147"}],
+        fullVersionList: [{brand:"Google Chrome",version:"147.0.0.0"},{brand:"Not.A/Brand",version:"8.0.0.0"},{brand:"Chromium",version:"147.0.0.0"}],
         mobile: false,
         model: "",
-        platform: "Linux",
-        platformVersion: "6.8.0",
-        uaFullVersion: "145.0.0.0",
+        platform: "macOS",
+        platformVersion: "15.5.0",
+        uaFullVersion: "147.0.0.0",
       });
     },
     toJSON() { return {brands:this.brands,mobile:this.mobile,platform:this.platform}; },

@@ -192,7 +192,7 @@ impl ObscuraHttpClient {
             proxy_url: proxy_url.map(|s| s.to_string()),
             cookie_jar,
             user_agent: RwLock::new(
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36".to_string(),
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36".to_string(),
             ),
             extra_headers: RwLock::new(HashMap::new()),
             interceptor: RwLock::new(None),
@@ -302,7 +302,7 @@ impl ObscuraHttpClient {
             let ua = self.user_agent.read().await.clone();
             let mut headers = HeaderMap::new();
             headers.insert(USER_AGENT, HeaderValue::from_str(&ua).unwrap_or_else(|_| {
-                HeaderValue::from_static("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36")
+                HeaderValue::from_static("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36")
             }));
             headers.insert(
                 reqwest::header::ACCEPT,
@@ -314,7 +314,12 @@ impl ObscuraHttpClient {
             );
             headers.insert(
                 HeaderName::from_static("sec-ch-ua"),
-                HeaderValue::from_static("\"Chromium\";v=\"145\", \"Not;A=Brand\";v=\"24\", \"Google Chrome\";v=\"145\""),
+                // Brand list mirrors wreq-util 3.0.0-rc.11's Chrome147 macOS profile
+                // so the non-stealth path produces the same Client Hints surface
+                // as `--stealth`. Keep these three lines, the JS-layer
+                // `navigator.userAgentData.brands`, and the wreq emulation profile
+                // version-locked together (see bootstrap.js:1191 + wreq_client.rs).
+                HeaderValue::from_static("\"Google Chrome\";v=\"147\", \"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"147\""),
             );
             headers.insert(
                 HeaderName::from_static("sec-ch-ua-mobile"),
@@ -322,7 +327,7 @@ impl ObscuraHttpClient {
             );
             headers.insert(
                 HeaderName::from_static("sec-ch-ua-platform"),
-                HeaderValue::from_static("\"Linux\""),
+                HeaderValue::from_static("\"macOS\""),
             );
             headers.insert(
                 HeaderName::from_static("sec-fetch-dest"),
