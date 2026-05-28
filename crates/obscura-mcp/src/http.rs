@@ -10,12 +10,27 @@ use crate::{dispatch, BrowserState};
 /// Connections are handled sequentially on the current thread — the browser
 /// session (including the V8 runtime) is single-threaded and `!Send`, so we
 /// never need to move state across threads.
-pub async fn run(port: u16, proxy: Option<String>, user_agent: Option<String>, stealth: bool) -> Result<()> {
+pub async fn run(
+    port: u16,
+    proxy: Option<String>,
+    user_agent: Option<String>,
+    stealth: bool,
+) -> Result<()> {
+    run_with_storage(port, proxy, user_agent, stealth, None).await
+}
+
+pub async fn run_with_storage(
+    port: u16,
+    proxy: Option<String>,
+    user_agent: Option<String>,
+    stealth: bool,
+    storage_dir: Option<std::path::PathBuf>,
+) -> Result<()> {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let listener = TcpListener::bind(&addr).await?;
     tracing::info!("MCP HTTP server on http://127.0.0.1:{}/mcp", port);
 
-    let mut state = BrowserState::new(proxy, user_agent, stealth);
+    let mut state = BrowserState::new_with_storage(proxy, user_agent, stealth, storage_dir);
 
     loop {
         let (stream, peer) = listener.accept().await?;

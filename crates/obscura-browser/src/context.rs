@@ -2,11 +2,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use obscura_ext::ExtensionRuntime;
-use obscura_net::{CookieJar, ObscuraHttpClient, RobotsCache};
+use obscura_net::{CookieJar, LocalStorageStore, ObscuraHttpClient, RobotsCache};
 
 pub struct BrowserContext {
     pub id: String,
     pub cookie_jar: Arc<CookieJar>,
+    /// Process-wide localStorage backing store, scoped per origin.
+    /// Survives navigation (the JS runtime gets re-bound to the same
+    /// `Arc` on every page) and persists to `{storage_dir}/localstorage.json`
+    /// when `storage_dir` is set. See `obscura_net::localstorage` for the
+    /// data model and `obscura_js::ops::op_localstorage_*` for the ops
+    /// that bootstrap.js routes `Storage.getItem` / `.setItem` through.
+    pub localstorage_store: Arc<LocalStorageStore>,
     pub http_client: Arc<ObscuraHttpClient>,
     pub user_agent: String,
     pub proxy_url: Option<String>,
@@ -72,8 +79,11 @@ impl BrowserContext {
         storage_dir: Option<PathBuf>,
     ) -> Self {
         let cookie_jar = Arc::new(CookieJar::new());
+        let localstorage_store = Arc::new(LocalStorageStore::new());
 
-        // Restore cookies from disk if storage_dir is configured
+        // Restore both halves of the session from disk if storage_dir is set.
+        // Eager-load is fine: cookies + localStorage for the typical site are
+        // both small (~kB), and any miss is a cheap missing-file return.
         if let Some(ref dir) = storage_dir {
             let cookie_path = dir.join("cookies.json");
             if cookie_path.exists() {
@@ -84,6 +94,26 @@ impl BrowserContext {
                     Ok(_) => {}
                     Err(e) => {
                         tracing::warn!("Failed to load cookies from {}: {}", cookie_path.display(), e);
+                    }
+                }
+            }
+            let ls_path = dir.join("localstorage.json");
+            if ls_path.exists() {
+                match localstorage_store.load_from_file(&ls_path) {
+                    Ok(n) if n > 0 => {
+                        tracing::info!(
+                            "Loaded localStorage for {} origin(s) from {}",
+                            n,
+                            ls_path.display()
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to load localStorage from {}: {}",
+                            ls_path.display(),
+                            e
+                        );
                     }
                 }
             }
@@ -109,6 +139,7 @@ impl BrowserContext {
         BrowserContext {
             id,
             cookie_jar,
+            localstorage_store,
             http_client,
             user_agent: resolved_ua,
             proxy_url,
@@ -138,18 +169,51 @@ impl BrowserContext {
         Self::with_options(id, proxy_url, false)
     }
 
-    /// Persist cookies to disk if storage_dir is configured.
-    /// Called during graceful shutdown.
-    pub fn save_cookies(&self) {
-        if let Some(ref dir) = self.storage_dir {
-            let _ = std::fs::create_dir_all(dir);
-            let cookie_path = dir.join("cookies.json");
-            if let Err(e) = self.cookie_jar.save_to_file(&cookie_path) {
-                tracing::warn!("Failed to save cookies to {}: {}", cookie_path.display(), e);
-            } else {
-                tracing::info!("Saved cookies to {}", cookie_path.display());
-            }
+    /// Persist the full session (cookies + localStorage) to disk if
+    /// `storage_dir` is configured. Called during graceful shutdown
+    /// (CLI exit, CDP server Ctrl-C, MCP `browser_close`).
+    ///
+    /// Both writes are independent: a failure to write one does not
+    /// prevent the other. Errors are logged at `warn!` since callers
+    /// generally cannot do anything useful with them at the point of
+    /// invocation (we're shutting down).
+    pub fn save_session(&self) {
+        let Some(ref dir) = self.storage_dir else {
+            return;
+        };
+        let _ = std::fs::create_dir_all(dir);
+
+        let cookie_path = dir.join("cookies.json");
+        if let Err(e) = self.cookie_jar.save_to_file(&cookie_path) {
+            tracing::warn!(
+                "Failed to save cookies to {}: {}",
+                cookie_path.display(),
+                e
+            );
+        } else {
+            tracing::info!("Saved cookies to {}", cookie_path.display());
         }
+
+        let ls_path = dir.join("localstorage.json");
+        if let Err(e) = self.localstorage_store.save_to_file(&ls_path) {
+            tracing::warn!(
+                "Failed to save localStorage to {}: {}",
+                ls_path.display(),
+                e
+            );
+        } else {
+            tracing::info!(
+                "Saved localStorage ({} origin(s)) to {}",
+                self.localstorage_store.origin_count(),
+                ls_path.display()
+            );
+        }
+    }
+
+    /// Backwards-compatible alias. New callers should use `save_session`.
+    #[deprecated(note = "use save_session, which also persists localStorage")]
+    pub fn save_cookies(&self) {
+        self.save_session();
     }
 }
 

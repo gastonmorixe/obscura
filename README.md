@@ -286,6 +286,7 @@ Start a CDP WebSocket server.
 | `--stealth` | off | Enable anti-detection + tracker blocking |
 | `--workers` | `1` | Number of parallel worker processes |
 | `--obey-robots` | off | Respect robots.txt |
+| `--storage-dir` | — | Persist the browser session (cookies + `localStorage`) under this directory. See *Persistent sessions* below |
 
 ### `obscura fetch <URL>`
 
@@ -302,6 +303,46 @@ Fetch and render a single page.
 | `--output` | — | Write dump or eval output to a file |
 | `--quiet` | off | Suppress banner |
 | `--proxy` | — | Inherited global HTTP/SOCKS5 proxy URL |
+| `--storage-dir` | — | Persist the browser session (cookies + `localStorage`) under this directory. See *Persistent sessions* below |
+
+### Persistent sessions
+
+Pass `--storage-dir <DIR>` to `obscura fetch`, `obscura serve`, or
+`obscura mcp` to keep the browser session alive across runs. The
+directory holds two JSON files written atomically (tempfile + rename):
+
+```
+$DIR/
+  cookies.json        # cookie jar, scoped per domain
+  localstorage.json   # localStorage, scoped per origin
+```
+
+Cookies and `localStorage` are loaded on context creation and saved on
+graceful exit (CLI returns, CDP `Ctrl-C`, MCP `browser_close`).
+`sessionStorage` and IndexedDB are NOT persisted — same as a real
+browser for sessionStorage; IndexedDB is on the roadmap.
+
+Logged-in scrape example:
+
+```bash
+# Run 1: log in (sets a session cookie via Set-Cookie).
+obscura fetch https://example.test/login --storage-dir ./session --eval '
+  const f = document.querySelector("form");
+  f.username.value = "me"; f.password.value = "secret";
+  f.submit();
+  "ok"
+'
+
+# Run 2: already logged in.
+obscura fetch https://example.test/feed --storage-dir ./session --dump text
+```
+
+The files are plaintext JSON. They include `HttpOnly` cookies and any
+auth tokens the site stashes in `localStorage`. Protect the directory
+the way you'd protect a Chrome profile dir — file permissions or an
+encrypted volume. Two obscura instances pointed at the same
+`--storage-dir` at the same time will race; it's a single-writer
+model.
 
 ### `obscura scrape <URL...>`
 
@@ -341,6 +382,7 @@ Optional flags (both transports):
 | `--proxy <URL>` | HTTP/SOCKS5 proxy |
 | `--user-agent <UA>` | Custom User-Agent string |
 | `--stealth` | Enable anti-detection mode |
+| `--storage-dir <DIR>` | Persist cookies + `localStorage` across runs. See *Persistent sessions* under `obscura fetch`. |
 
 ### Claude Desktop config
 
@@ -410,7 +452,7 @@ the extracted text on JS-heavy SPAs.
 | Manifest V2 (Firefox) | Reference target; `background.scripts` runs as a single concatenated chunk in the page realm |
 | Manifest V3 (Chrome) | Loads; service-worker lifecycle not emulated (background runs as a persistent script) |
 | `chrome.runtime` | `getManifest`, `getURL`, `getPlatformInfo`, `id`, `lastError`, `sendMessage`, `onMessage`, `onInstalled`, `onStartup`, `onConnect`, `openOptionsPage` |
-| `chrome.storage.local` / `.sync` / `.session` | In-memory per page; not persisted across navigations |
+| `chrome.storage.local` / `.sync` / `.session` | In-memory per page; not persisted across navigations. (Note: `localStorage` itself IS persisted across runs when `--storage-dir` is set — see *Persistent sessions*.) |
 | `chrome.tabs` | `query`, `get`, `getCurrent`, `sendMessage`, `executeScript`, `update`, `create`, `reload`, `onUpdated`, `onActivated` |
 | `chrome.scripting.executeScript` | Loads bundle files into the page realm |
 | `chrome.permissions` | `contains` / `request` / `remove` auto-grant the manifest's host_permissions |

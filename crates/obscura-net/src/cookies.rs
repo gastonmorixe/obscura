@@ -712,6 +712,8 @@ mod tests {
         let url = Url::parse("https://example.com/").unwrap();
         assert!(jar.get_cookie_header(&url).is_empty());
     }
+
+    #[test]
     fn test_save_load_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("cookies.json");
@@ -763,7 +765,6 @@ mod tests {
     #[test]
     fn test_cookie_from_file_load_then_send_in_request() {
         // Simulate what happens: load cookies from file → navigate → cookie should be in request
-        use std::io::Write;
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("cookies.json");
         

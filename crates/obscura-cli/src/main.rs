@@ -32,6 +32,13 @@ struct Args {
     #[arg(long)]
     user_agent: Option<String>,
 
+    /// Persist the browser session (cookies + `localStorage`) to this
+    /// directory. The `mcp` subcommand falls back to this when its own
+    /// `--storage-dir` is omitted; `fetch` and `serve` require the
+    /// subcommand-level flag explicitly. On graceful shutdown the jar
+    /// is written atomically as `cookies.json` + `localstorage.json`
+    /// under this directory. See `docs/persistence.md` for the on-disk
+    /// shape and threat model.
     #[arg(long)]
     storage_dir: Option<std::path::PathBuf>,
 
@@ -85,6 +92,12 @@ enum Command {
         #[arg(long)]
         allow_file_access: bool,
 
+        /// Persist the CDP browser session (cookies + `localStorage`)
+        /// to this directory. Loaded on context creation, saved on
+        /// Ctrl-C / channel close. Files: `cookies.json` and
+        /// `localstorage.json`. See `docs/persistence.md` for layout
+        /// and `obscura fetch --storage-dir` for an end-to-end
+        /// example.
         #[arg(long)]
         storage_dir: Option<std::path::PathBuf>,
     },
@@ -122,6 +135,12 @@ enum Command {
         #[arg(long, short)]
         quiet: bool,
 
+        /// Persist the browser session (cookies + `localStorage`) to
+        /// this directory. Loaded on startup, saved at exit. Files:
+        /// `cookies.json` and `localstorage.json`. Pass the same dir
+        /// across multiple `obscura fetch` invocations to stay logged
+        /// in across runs. See `docs/persistence.md` for the threat
+        /// model (plaintext on disk, no cross-process locking).
         #[arg(long)]
         storage_dir: Option<std::path::PathBuf>,
     },
@@ -160,6 +179,14 @@ enum Command {
 
         #[arg(long)]
         stealth: bool,
+
+        /// Persist the browser session (cookies + localStorage) to this
+        /// directory. Re-runs of `obscura mcp --storage-dir <dir>` see the
+        /// same cookies and localStorage as the previous run, enabling
+        /// stay-logged-in workflows. See `obscura fetch --storage-dir` for
+        /// the on-disk shape (`cookies.json` + `localstorage.json`).
+        #[arg(long)]
+        storage_dir: Option<std::path::PathBuf>,
     },
 
 }
@@ -353,13 +380,32 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Scrape { urls, eval, concurrency, format, timeout, quiet }) => {
             run_parallel_scrape(urls, eval, concurrency.get(), &format, timeout, quiet, global_proxy).await?;
         }
-        Some(Command::Mcp { http, port, proxy, user_agent, stealth }) => {
+        Some(Command::Mcp { http, port, proxy, user_agent, stealth, storage_dir }) => {
             let mcp_proxy = merge_proxy(global_proxy.clone(), proxy.clone());
             reject_stealth_with_socks5(mcp_proxy.as_deref(), stealth)?;
+            // Fall back to the global --storage-dir if the subcommand didn't
+            // override it, matching how --proxy works above.
+            let effective_storage_dir = storage_dir.or_else(|| args.storage_dir.clone());
+            if let Some(ref dir) = effective_storage_dir {
+                tracing::info!("Using storage dir for MCP session: {}", dir.display());
+            }
             if http {
-                obscura_mcp::http::run(port, proxy, user_agent, stealth).await?;
+                obscura_mcp::http::run_with_storage(
+                    port,
+                    proxy,
+                    user_agent,
+                    stealth,
+                    effective_storage_dir,
+                )
+                .await?;
             } else {
-                obscura_mcp::run(proxy, user_agent, stealth).await?;
+                obscura_mcp::run_with_storage(
+                    proxy,
+                    user_agent,
+                    stealth,
+                    effective_storage_dir,
+                )
+                .await?;
             }
         }
         None => {
@@ -580,13 +626,29 @@ async fn run_fetch(
 
     if let Some(ref expr) = eval {
         let result = page.evaluate(expr);
+        // If the eval triggered `form.submit()`, `location.href = ...`, or
+        // `op_navigate` in any other way, drain the pending navigation so
+        // Set-Cookie headers from the redirect chain land in the jar before
+        // `save_session()` runs. Matches what CDP's Runtime.evaluate does
+        // (see `domains/runtime.rs`). Bounded to keep a pathological
+        // redirect loop from hanging the CLI.
+        for _ in 0..10 {
+            match page.process_pending_navigation().await {
+                Ok(true) => continue,
+                Ok(false) => break,
+                Err(e) => {
+                    eprintln!("Warning: post-eval navigation failed: {}", e);
+                    break;
+                }
+            }
+        }
         let rendered = match result {
             serde_json::Value::String(s) => s,
             serde_json::Value::Null => "null".to_string(),
             other => other.to_string(),
         };
         write_or_print(rendered, output.as_ref()).await?;
-        context.save_cookies();
+        context.save_session();
         return Ok(());
     }
 
@@ -601,8 +663,8 @@ async fn run_fetch(
     };
     write_or_print(rendered, output.as_ref()).await?;
 
-    // Save cookies to disk if storage_dir is configured
-    context.save_cookies();
+    // Save full session (cookies + localStorage) to disk if storage_dir is set
+    context.save_session();
 
     Ok(())
 }

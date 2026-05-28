@@ -8,7 +8,7 @@ use deno_core::OpState;
 use deno_core::Extension;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use obscura_dom::{DomTree, NodeData, NodeId};
-use obscura_net::{CookieJar, ObscuraHttpClient};
+use obscura_net::{CookieJar, LocalStorageStore, ObscuraHttpClient};
 use tokio::sync::Mutex;
 
 pub type InterceptCallback = Arc<Mutex<Option<Box<dyn Fn(String, String, String) -> Option<(u16, String, String)> + Send + Sync>>>>;
@@ -44,6 +44,12 @@ pub struct ObscuraState {
     pub title: String,
     pub blocked_urls: Vec<String>,
     pub cookie_jar: Option<Arc<CookieJar>>,
+    /// Process-wide localStorage backing store. Set by
+    /// `ObscuraJsRuntime::set_localstorage_store` before the page's first
+    /// JS executes. When `None`, the localStorage ops silently no-op,
+    /// matching the pre-persistence behaviour where each runtime had its
+    /// own in-memory closure.
+    pub localstorage_store: Option<Arc<LocalStorageStore>>,
     pub http_client: Option<Arc<ObscuraHttpClient>>,
     pub pending_navigation: Option<(String, String, String)>,
     pub intercept_tx: Option<tokio::sync::mpsc::UnboundedSender<InterceptedRequest>>,
@@ -59,6 +65,7 @@ impl ObscuraState {
             title: String::new(),
             blocked_urls: Vec::new(),
             cookie_jar: None,
+            localstorage_store: None,
             http_client: None,
             pending_navigation: None,
             intercept_tx: None,
@@ -774,6 +781,122 @@ fn op_navigate(state: &OpState, #[string] url: &str, #[string] method: &str, #[s
     gs.pending_navigation = Some((url.to_string(), method.to_string(), body.to_string()));
 }
 
+// ─────────────────────────── localStorage ops ───────────────────────────
+//
+// The JS Storage API maps to these ops 1:1; the bootstrap.js `localStorage`
+// Proxy routes property access and getItem/setItem through them. Every op
+// derives the current origin from `state.url` (set by `op_navigate` and the
+// runtime's `set_url`) and routes through the `BrowserContext`-owned
+// `LocalStorageStore`. Opaque origins (about:blank, data: URIs, failed
+// parses) silently no-op on writes and return `null` on reads — matching
+// what real browsers do for those pages.
+//
+// String ops return JSON-encoded values ("null" or "\"value\"") so JS can
+// distinguish "key absent" from "key present, empty string" by parsing.
+// This mirrors the `op_dom` convention already used elsewhere.
+
+fn ls_current_origin(gs: &ObscuraState) -> Option<String> {
+    obscura_net::origin_of(&gs.url)
+}
+
+#[op2]
+#[string]
+fn op_localstorage_get_item(state: &OpState, #[string] key: &str) -> String {
+    let gs = state.borrow::<SharedState>().clone();
+    let gs = gs.borrow();
+    let store = match &gs.localstorage_store {
+        Some(s) => s,
+        None => return "null".to_string(),
+    };
+    let origin = match ls_current_origin(&gs) {
+        Some(o) => o,
+        None => return "null".to_string(),
+    };
+    match store.get_item(&origin, key) {
+        Some(v) => serde_json::to_string(&v).unwrap_or_else(|_| "null".to_string()),
+        None => "null".to_string(),
+    }
+}
+
+#[op2(fast)]
+fn op_localstorage_set_item(state: &OpState, #[string] key: &str, #[string] value: &str) {
+    let gs = state.borrow::<SharedState>().clone();
+    let gs = gs.borrow();
+    let store = match &gs.localstorage_store {
+        Some(s) => s,
+        None => return,
+    };
+    let origin = match ls_current_origin(&gs) {
+        Some(o) => o,
+        None => return,
+    };
+    store.set_item(&origin, key, value);
+}
+
+#[op2(fast)]
+fn op_localstorage_remove_item(state: &OpState, #[string] key: &str) {
+    let gs = state.borrow::<SharedState>().clone();
+    let gs = gs.borrow();
+    let store = match &gs.localstorage_store {
+        Some(s) => s,
+        None => return,
+    };
+    let origin = match ls_current_origin(&gs) {
+        Some(o) => o,
+        None => return,
+    };
+    store.remove_item(&origin, key);
+}
+
+#[op2(fast)]
+fn op_localstorage_clear(state: &OpState) {
+    let gs = state.borrow::<SharedState>().clone();
+    let gs = gs.borrow();
+    let store = match &gs.localstorage_store {
+        Some(s) => s,
+        None => return,
+    };
+    let origin = match ls_current_origin(&gs) {
+        Some(o) => o,
+        None => return,
+    };
+    store.clear_origin(&origin);
+}
+
+#[op2(fast)]
+fn op_localstorage_length(state: &OpState) -> u32 {
+    let gs = state.borrow::<SharedState>().clone();
+    let gs = gs.borrow();
+    let store = match &gs.localstorage_store {
+        Some(s) => s,
+        None => return 0,
+    };
+    let origin = match ls_current_origin(&gs) {
+        Some(o) => o,
+        None => return 0,
+    };
+    store.length(&origin) as u32
+}
+
+#[op2]
+#[string]
+fn op_localstorage_key(state: &OpState, index: u32) -> String {
+    let gs = state.borrow::<SharedState>().clone();
+    let gs = gs.borrow();
+    let store = match &gs.localstorage_store {
+        Some(s) => s,
+        None => return "null".to_string(),
+    };
+    let origin = match ls_current_origin(&gs) {
+        Some(o) => o,
+        None => return "null".to_string(),
+    };
+    match store.key_at(&origin, index as usize) {
+        Some(k) => serde_json::to_string(&k).unwrap_or_else(|_| "null".to_string()),
+        None => "null".to_string(),
+    }
+}
+
 #[op2(async)]
 async fn op_sleep(#[number] millis: u64) {
     tokio::time::sleep(std::time::Duration::from_millis(millis)).await;
@@ -790,6 +913,12 @@ pub fn build_extension() -> Extension {
             op_set_cookie(),
             op_navigate(),
             op_sleep(),
+            op_localstorage_get_item(),
+            op_localstorage_set_item(),
+            op_localstorage_remove_item(),
+            op_localstorage_clear(),
+            op_localstorage_length(),
+            op_localstorage_key(),
         ]),
         ..Default::default()
     }

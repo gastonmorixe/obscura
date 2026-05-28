@@ -247,6 +247,10 @@ impl Page {
         }
 
         rt.set_cookie_jar(self.context.cookie_jar.clone());
+        // Share the BrowserContext-owned localStorage store with the new
+        // V8 runtime so per-origin entries survive navigation. The store
+        // itself outlives the runtime; the runtime only borrows an Arc.
+        rt.set_localstorage_store(self.context.localstorage_store.clone());
         rt.set_http_client(self.http_client.clone());
 
         if let Some(tx) = &self.intercept_tx {

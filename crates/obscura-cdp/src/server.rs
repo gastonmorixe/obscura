@@ -323,8 +323,8 @@ async fn cdp_processor(
 
     // Subscribe to Ctrl-C once. The future is single-shot, so we break out of
     // the outer loop when it fires and never poll it again. Without this the
-    // accept loop just exits and any cookies set during the session are lost
-    // before `BrowserContext::save_cookies()` runs.
+    // accept loop just exits and any cookies / localStorage set during the
+    // session are lost before `BrowserContext::save_session()` runs.
     let mut shutdown = Box::pin(tokio::signal::ctrl_c());
 
     loop {
@@ -376,9 +376,9 @@ async fn cdp_processor(
     }
 
     // Single exit point handles both Ctrl-C shutdown and the channel being
-    // closed by the accept thread. Without this any cookies set during the
-    // session are dropped on the floor.
-    ctx.default_context.save_cookies();
+    // closed by the accept thread. Without this any cookies / localStorage
+    // set during the session are dropped on the floor.
+    ctx.default_context.save_session();
 }
 
 fn handle_fetch_resolution(

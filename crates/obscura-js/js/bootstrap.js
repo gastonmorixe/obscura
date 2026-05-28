@@ -2230,6 +2230,10 @@ globalThis.crypto = globalThis.crypto || { getRandomValues(arr) { for(let i=0;i<
 globalThis.structuredClone = globalThis.structuredClone || ((v) => JSON.parse(JSON.stringify(v)));
 globalThis.reportError = globalThis.reportError || ((e) => console.error(e));
 
+// Storage interface lives on the prototype so `localStorage instanceof Storage`
+// works for both the persistent localStorage and the in-memory sessionStorage.
+// Backing data is `_data` on each instance for sessionStorage; localStorage
+// shadows the methods to dispatch to Rust-side ops.
 globalThis.Storage = function Storage() {};
 Storage.prototype.getItem = function(k) { return (this._data && this._data[k]) ?? null; };
 Storage.prototype.setItem = function(k, v) { if (this._data) this._data[k] = String(v); };
@@ -2238,9 +2242,86 @@ Storage.prototype.clear = function() { if (this._data) for (var k in this._data)
 Object.defineProperty(Storage.prototype, 'length', { get: function() { return this._data ? Object.keys(this._data).length : 0; } });
 Storage.prototype.key = function(i) { return this._data ? Object.keys(this._data)[i] ?? null : null; };
 
-const _mkStore = () => { var s = Object.create(Storage.prototype); s._data = {}; return s; };
-globalThis.localStorage = _mkStore();
-globalThis.sessionStorage = _mkStore();
+// sessionStorage: per-tab in-memory, dies with the V8 runtime. Real browsers
+// don't persist sessionStorage either, so we keep the existing closure.
+const _mkSessionStore = () => { var s = Object.create(Storage.prototype); s._data = {}; return s; };
+globalThis.sessionStorage = _mkSessionStore();
+
+// localStorage: routed through Rust ops (op_localstorage_*) that read/write
+// a per-origin store on the BrowserContext. When `--storage-dir` is set,
+// the store persists across runs as `{storage_dir}/localstorage.json`.
+//
+// The underlying core object inherits from Storage.prototype but shadows
+// every method with one that dispatches to ops. Then we wrap with a Proxy
+// so direct property access (`localStorage.foo`, `'foo' in localStorage`,
+// `delete localStorage.foo`, `Object.keys(localStorage)`) works like real
+// Storage objects expose it.
+const _lsCore = Object.create(Storage.prototype);
+Object.defineProperties(_lsCore, {
+  getItem: { value: function(k) {
+    return JSON.parse(Deno.core.ops.op_localstorage_get_item(String(k)));
+  }, writable: false, configurable: false, enumerable: false },
+  setItem: { value: function(k, v) {
+    Deno.core.ops.op_localstorage_set_item(String(k), String(v));
+  }, writable: false, configurable: false, enumerable: false },
+  removeItem: { value: function(k) {
+    Deno.core.ops.op_localstorage_remove_item(String(k));
+  }, writable: false, configurable: false, enumerable: false },
+  clear: { value: function() {
+    Deno.core.ops.op_localstorage_clear();
+  }, writable: false, configurable: false, enumerable: false },
+  key: { value: function(i) {
+    return JSON.parse(Deno.core.ops.op_localstorage_key(Number(i) | 0));
+  }, writable: false, configurable: false, enumerable: false },
+  length: { get: function() {
+    return Deno.core.ops.op_localstorage_length();
+  }, configurable: false, enumerable: false },
+});
+
+const _lsMethodNames = new Set(['getItem', 'setItem', 'removeItem', 'clear', 'key', 'length']);
+
+globalThis.localStorage = new Proxy(_lsCore, {
+  get(target, prop, receiver) {
+    if (typeof prop === 'symbol') return Reflect.get(target, prop, receiver);
+    if (_lsMethodNames.has(prop)) return Reflect.get(target, prop, receiver);
+    // Property access on Storage objects returns the value (string) when the
+    // key exists, undefined otherwise. Real browsers expose `length` as a
+    // getter and the methods via the prototype; both are caught above.
+    const v = target.getItem(prop);
+    return v === null ? undefined : v;
+  },
+  set(target, prop, value) {
+    if (typeof prop === 'symbol' || _lsMethodNames.has(prop)) return false;
+    target.setItem(prop, value);
+    return true;
+  },
+  has(target, prop) {
+    if (typeof prop === 'symbol' || _lsMethodNames.has(prop)) return prop in target;
+    return target.getItem(prop) !== null;
+  },
+  deleteProperty(target, prop) {
+    if (typeof prop === 'symbol' || _lsMethodNames.has(prop)) return false;
+    target.removeItem(prop);
+    return true;
+  },
+  ownKeys(target) {
+    const n = target.length;
+    const keys = [];
+    for (let i = 0; i < n; i++) {
+      const k = target.key(i);
+      if (k !== null) keys.push(k);
+    }
+    return keys;
+  },
+  getOwnPropertyDescriptor(target, prop) {
+    if (typeof prop === 'symbol' || _lsMethodNames.has(prop)) {
+      return Reflect.getOwnPropertyDescriptor(target, prop);
+    }
+    const v = target.getItem(prop);
+    if (v === null) return undefined;
+    return { configurable: true, enumerable: true, value: v, writable: true };
+  },
+});
 
 globalThis.btoa = globalThis.btoa || ((s) => { const b = new TextEncoder().encode(s); const c="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"; let r=""; for(let i=0;i<b.length;i+=3){const a=b[i],bb=b[i+1]??0,cc=b[i+2]??0; r+=c[a>>2]+c[((a&3)<<4)|(bb>>4)]+(i+1<b.length?c[((bb&15)<<2)|(cc>>6)]:"=")+(i+2<b.length?c[cc&63]:"=");} return r; });
 globalThis.atob = globalThis.atob || ((s) => { const c="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"; let r=[]; for(let i=0;i<s.length;i+=4){const a=c.indexOf(s[i]),b=c.indexOf(s[i+1]),cc=c.indexOf(s[i+2]),d=c.indexOf(s[i+3]); r.push((a<<2)|(b>>4)); if(cc>=0)r.push(((b&15)<<4)|(cc>>2)); if(d>=0)r.push(((cc&3)<<6)|d);} return String.fromCharCode(...r); });

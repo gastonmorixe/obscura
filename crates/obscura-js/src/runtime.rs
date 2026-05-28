@@ -73,6 +73,15 @@ impl ObscuraJsRuntime {
         self.state.borrow_mut().cookie_jar = Some(jar);
     }
 
+    /// Wire the per-context localStorage backing store into the JS realm.
+    /// Bootstrap.js routes `Storage.getItem` / `.setItem` / friends through
+    /// the `op_localstorage_*` ops, which dispatch to this store keyed by
+    /// the current page's origin. Without this call the ops silently
+    /// no-op, matching the pre-persistence "in-memory closure" behaviour.
+    pub fn set_localstorage_store(&self, store: std::sync::Arc<obscura_net::LocalStorageStore>) {
+        self.state.borrow_mut().localstorage_store = Some(store);
+    }
+
     pub fn set_http_client(&self, client: std::sync::Arc<obscura_net::ObscuraHttpClient>) {
         self.state.borrow_mut().http_client = Some(client);
     }

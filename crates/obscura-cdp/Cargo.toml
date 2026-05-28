@@ -22,3 +22,4 @@ obscura-net = { workspace = true }
 [dev-dependencies]
 tokio-tungstenite = { workspace = true }
 futures-util = "0.3"
+tempfile = "3"

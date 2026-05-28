@@ -1660,6 +1660,7 @@ dependencies = [
  "obscura-net",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-tungstenite",

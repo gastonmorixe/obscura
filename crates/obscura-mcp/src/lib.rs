@@ -53,10 +53,31 @@ pub struct BrowserState {
 }
 
 impl BrowserState {
+    /// Legacy entry. Constructs a non-persistent session. Prefer
+    /// `new_with_storage` so the user can pass `--storage-dir`.
     pub fn new(proxy: Option<String>, user_agent: Option<String>, stealth: bool) -> Self {
+        Self::new_with_storage(proxy, user_agent, stealth, None)
+    }
+
+    /// Construct an MCP session, optionally backed by a persistent storage
+    /// directory. When `storage_dir` is set, cookies + localStorage are
+    /// loaded on startup and saved on `browser_close` / process exit.
+    pub fn new_with_storage(
+        proxy: Option<String>,
+        user_agent: Option<String>,
+        stealth: bool,
+        storage_dir: Option<std::path::PathBuf>,
+    ) -> Self {
+        let ctx = BrowserContext::with_storage_full(
+            "mcp".to_string(),
+            proxy,
+            stealth,
+            user_agent.clone(),
+            storage_dir,
+        );
         BrowserState {
             page: None,
-            context: Arc::new(BrowserContext::with_options("mcp".to_string(), proxy, stealth)),
+            context: Arc::new(ctx),
             user_agent,
             console_messages: Vec::new(),
         }
@@ -82,13 +103,26 @@ pub async fn dispatch(method: &str, id: Value, params: &Value, state: &mut Brows
     }
 }
 
-pub async fn run(proxy: Option<String>, user_agent: Option<String>, stealth: bool) -> Result<()> {
+pub async fn run(
+    proxy: Option<String>,
+    user_agent: Option<String>,
+    stealth: bool,
+) -> Result<()> {
+    run_with_storage(proxy, user_agent, stealth, None).await
+}
+
+pub async fn run_with_storage(
+    proxy: Option<String>,
+    user_agent: Option<String>,
+    stealth: bool,
+    storage_dir: Option<std::path::PathBuf>,
+) -> Result<()> {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
     let mut reader = BufReader::new(stdin);
     let mut writer = stdout;
 
-    let mut state = BrowserState::new(proxy, user_agent, stealth);
+    let mut state = BrowserState::new_with_storage(proxy, user_agent, stealth, storage_dir);
 
     loop {
         // MCP stdio transport: newline-delimited JSON (one message per line)
@@ -531,6 +565,9 @@ fn tool_console_messages(state: &BrowserState) -> Result<String, String> {
 }
 
 fn tool_close(state: &mut BrowserState) -> Result<String, String> {
+    // Flush cookies + localStorage to disk before tearing the page down.
+    // No-op when the context wasn't constructed with a storage dir.
+    state.context.save_session();
     state.page = None;
     state.console_messages.clear();
     Ok("Browser page closed.".to_string())
