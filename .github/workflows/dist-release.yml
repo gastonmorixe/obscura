@@ -1,0 +1,159 @@
+name: Dist Release (public binaries)
+
+# Cross-publishes COMPILED obscura binaries from this PRIVATE source repo to a
+# PUBLIC dist repo's Releases. The source stays private; only the artifacts go
+# public, which gives stable, anonymous, token-less download URLs that the
+# minimal-agent ma-fetch plugin can hardcode in its setup() (private release
+# assets have no such URL. Every download needs a token, and the CDN URL is
+# signed + expiring).
+#
+# Assets are named with a BUILD EPOCH (obscura-<target>-<epoch>.tar.gz) so a
+# newer build sorts above an older one by filename alone, letting the plugin
+# compare versions WITHOUT executing the binary.
+#
+# Trigger: every push to the private gm/private branch (continuous fresh
+# builds), plus manual dispatch. The dist release is updated in place under a
+# rolling `latest` tag AND a unique `build-<epoch>` tag for pinning.
+#
+# Required secret: DIST_REPO_TOKEN, a fine-grained PAT with `contents: write`
+# on the PUBLIC dist repo (gastonmorixe/obscura-dist). Set DIST_REPO to
+# override the default target.
+
+on:
+  push:
+    branches: [gm/private]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DIST_REPO: gastonmorixe/obscura-dist
+
+jobs:
+  epoch:
+    runs-on: ubuntu-latest
+    outputs:
+      epoch: ${{ steps.e.outputs.epoch }}
+    steps:
+      - id: e
+        # One epoch for the whole matrix so every per-target asset shares the
+        # same version token in its filename.
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: epoch
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: obscura-aarch64-macos
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            name: obscura-x86_64-macos
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
+            name: obscura-aarch64-linux
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            name: obscura-x86_64-linux
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Build WITH the stealth feature. The ma-fetch backend always passes
+      # --stealth, so the shipped binary MUST support it. This is a hard build
+      # (no continue-on-error): a stealth build failure fails the job rather
+      # than silently shipping a non-stealth binary.
+      - name: Build (stealth)
+        run: cargo build --release --locked --target ${{ matrix.target }} --features stealth
+
+      - name: Package
+        id: pkg
+        run: |
+          EPOCH="${{ needs.epoch.outputs.epoch }}"
+          ASSET="${{ matrix.name }}-${EPOCH}.tar.gz"
+          cd target/${{ matrix.target }}/release
+          tar czf "../../../${ASSET}" obscura obscura-worker
+          cd ../../..
+          SHA=$(shasum -a 256 "${ASSET}" | awk '{print $1}')
+          echo "asset=${ASSET}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
+          # Sidecar checksum file so the plugin author (and CI) can read the
+          # digest to hardcode into setup.ts without re-downloading.
+          echo "${SHA}  ${ASSET}" > "${ASSET}.sha256"
+
+      - name: Upload build artifact (for the publish job)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            ${{ steps.pkg.outputs.asset }}
+            ${{ steps.pkg.outputs.asset }}.sha256
+          retention-days: 7
+
+  publish:
+    needs: [epoch, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect built assets
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List assets + assemble manifest
+        run: |
+          ls -la dist
+          EPOCH="${{ needs.epoch.outputs.epoch }}"
+          # A small machine-readable manifest the plugin author can curl to
+          # learn the current epoch + per-asset sha256 in one shot.
+          {
+            echo "{"
+            echo "  \"epoch\": \"${EPOCH}\"," 
+            echo "  \"assets\": {"
+            first=1
+            for f in dist/*.sha256; do
+              asset=$(basename "$f" .sha256)
+              sha=$(awk '{print $1}' "$f")
+              if [ $first -eq 0 ]; then echo "    ,"; fi
+              echo "    \"${asset}\": \"${sha}\""
+              first=0
+            done
+            echo "  }"
+            echo "}"
+          } > dist/manifest-${EPOCH}.json
+          cat dist/manifest-${EPOCH}.json
+
+      # Publish to the PUBLIC dist repo under two tags:
+      #   - build-<epoch> : immutable, pin-able
+      #   - latest        : rolling pointer the plugin's default URL uses
+      - name: Publish build-<epoch> release to public dist repo
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.DIST_REPO_TOKEN }}
+          repository: ${{ env.DIST_REPO }}
+          tag_name: build-${{ needs.epoch.outputs.epoch }}
+          name: obscura build ${{ needs.epoch.outputs.epoch }}
+          body: |
+            Compiled obscura binaries (stealth) built from the private source repo.
+            Epoch: ${{ needs.epoch.outputs.epoch }}
+          files: dist/*
+
+      - name: Update rolling 'latest' release to public dist repo
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.DIST_REPO_TOKEN }}
+          repository: ${{ env.DIST_REPO }}
+          tag_name: latest
+          name: obscura latest
+          body: |
+            Rolling latest obscura binaries (stealth). Epoch ${{ needs.epoch.outputs.epoch }}.
+          files: dist/*

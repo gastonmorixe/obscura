@@ -65,12 +65,14 @@ jobs:
           linker = "aarch64-linux-gnu-gcc"
           CARGO_EOF
 
-      - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Build stealth
+      # Build WITH the stealth feature in one shot. The packaged binary MUST
+      # support --stealth (the ma-fetch backend always passes it), so this is a
+      # hard build: a stealth-feature failure fails the job rather than the old
+      # behavior of silently shipping the non-stealth binary from a separate
+      # plain `cargo build` while the `--features stealth` build was allowed to
+      # fail via continue-on-error.
+      - name: Build (stealth)
         run: cargo build --release --target ${{ matrix.target }} --features stealth
-        continue-on-error: true
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
