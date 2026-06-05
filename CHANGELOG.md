@@ -78,6 +78,33 @@ under *Unreleased* land in the next tag.
 
 ### Fixed
 
+- **WSJ (DataDome) now loads under `--stealth`.** WSJ articles were
+  returning the DataDome CAPTCHA interstitial
+  (`geo.captcha-delivery.com`) while Bloomberg (PerimeterX) worked.
+  Root cause was the stealth client's HTTP request header *set*, not
+  the TLS/HTTP2 fingerprint: captured against a live Chrome 148 on the
+  same machine/IP, obscura's JA4
+  (`t13d1514h2_8daaf6152771_9a55b862dad6`) and HTTP/2 Akamai digest
+  (`52d84b11737d980aef856699f885ca86`) already matched byte-for-byte.
+  The divergence was (a) **no `accept-encoding` header at all** — the
+  wreq-util Chrome emulation only emits it under `emulation-compression`,
+  which was off, and wreq carried no decode features, so advertising it
+  manually would have broken response decompression; and (b) extra
+  `cache-control: no-cache` + `pragma: no-cache` that a real Chrome
+  address-bar navigation never sends. Both are header-set drift that
+  DataDome scores. Fix:
+  - `obscura-net/Cargo.toml`: enable `emulation-compression` on
+    `wreq-util` (advertises `gzip, deflate, br, zstd` in Chrome's native
+    header slot) paired with `gzip`/`brotli`/`deflate`/`zstd` on `wreq`
+    (so the advertised encodings are actually auto-decompressed). The
+    two move together by necessity.
+  - `obscura-net/src/wreq_client.rs`: drop the manual
+    `cache-control`/`pragma`; let the emulation own `accept-encoding`
+    and the rest of the nav header set so wire order stays
+    Chrome-correct. Only the version-identity overrides (sec-ch-ua 148
+    brand list, UA string) and the hop-0 nav headers (`accept`,
+    `upgrade-insecure-requests`, `priority`, `sec-fetch-user`) are still
+    set by hand. Bloomberg/PerimeterX continues to pass.
 - `crates/obscura-net/src/cookies.rs::test_save_load_roundtrip`
   was missing its `#[test]` attribute and never ran. Added the
   attribute; the dead-code warning is gone.

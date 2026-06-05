@@ -442,6 +442,8 @@ dependencies = [
  "compression-core",
  "flate2",
  "memchr",
+ "zstd",
+ "zstd-safe",
 ]
 
 [[package]]
@@ -3497,6 +3499,7 @@ dependencies = [
  "tokio",
  "tokio-boring2",
  "tower",
+ "tower-http",
  "url",
  "want",
  "webpki-root-certs",

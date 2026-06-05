@@ -18,14 +18,29 @@ thiserror = { workspace = true }
 async-trait = "0.1"
 encoding_rs = "0.8"
 tempfile = "3"
-wreq-util = { version = "3.0.0-rc.11", optional = true }
+# `emulation-compression` makes wreq-util's Chrome emulation emit the
+# `accept-encoding` request header in its native position (right after
+# `accept`, before `accept-language`), matching live Chrome. Without it the
+# emulation omits accept-encoding entirely — a glaring bot signal, since every
+# real browser advertises it. DataDome (WSJ via geo.captcha-delivery.com)
+# scores its absence and serves the CAPTCHA interstitial. Must be paired with
+# wreq's decode features below so the advertised encodings are actually
+# decompressed (see issue: WSJ/DataDome block).
+wreq-util = { version = "3.0.0-rc.11", optional = true, features = ["emulation-compression"] }
 
 # `prefix-symbols` renames BoringSSL exports to avoid clashes with system OpenSSL,
 # but the renaming is only correct on Linux and Android (per wreq's README).
 # Enabling it on other platforms produces unresolved `build_script_main_*`
 # symbols at link time (see issue #39).
+#
+# gzip/brotli/deflate/zstd enable wreq's response-body auto-decompression layer.
+# These MUST be on whenever we advertise `accept-encoding` (via wreq-util's
+# emulation-compression), otherwise a compressed 200 OK comes back as raw
+# bytes the dump pipeline can't parse. Chrome 121+ advertises
+# `gzip, deflate, br, zstd`; enabling all four keeps the wire advert and the
+# decoder in lockstep.
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
-wreq = { version = "6.0.0-rc.28", optional = true, features = ["prefix-symbols"] }
+wreq = { version = "6.0.0-rc.28", optional = true, features = ["prefix-symbols", "gzip", "brotli", "deflate", "zstd"] }
 
 [target.'cfg(not(any(target_os = "linux", target_os = "android")))'.dependencies]
-wreq = { version = "6.0.0-rc.28", optional = true }
+wreq = { version = "6.0.0-rc.28", optional = true, features = ["gzip", "brotli", "deflate", "zstd"] }
