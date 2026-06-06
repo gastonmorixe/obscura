@@ -76,6 +76,37 @@ under *Unreleased* land in the next tag.
   session; the old name only ever flushed cookies. External
   callers keep compiling.
 
+### Added
+
+- **Extension request-header rewrites are honored on the document fetch.**
+  Paywall-bypass extensions (e.g. Bypass Paywalls Clean) unlock article
+  bodies by setting a `Referer` / `User-Agent` / `Cookie` on the top-level
+  navigation, registered through `chrome.declarativeNetRequest`
+  (`modifyHeaders` rules) or a blocking `webRequest.onBeforeSendHeaders`
+  listener. Obscura used to drop both: `declarativeNetRequest.updateSessionRules`
+  was a no-op and `webRequest` listeners were never invoked, so the
+  rewritten header never reached the network and the page came back
+  truncated. Now:
+  - `chrome.declarativeNetRequest` maintains a real session/dynamic rule
+    registry in the extension realm; the host harvests it after the
+    background runs and parses `modifyHeaders` request-header rules
+    (`obscura_ext::dnr`, with a faithful `urlFilter`/`regexFilter` matcher).
+  - Blocking `webRequest.onBeforeSendHeaders` listeners run in a pre-pass
+    against a synthetic `main_frame` request.
+  - A navigation pre-pass (`Page::collect_extension_request_headers`) runs
+    the extension once in a throwaway realm *before* the document fetch and
+    applies the resolved rewrites to whichever HTTP client performs it
+    (stealth wreq or plain reqwest).
+  - New tests: 13 in `obscura-ext/src/dnr.rs`, header-resolution tests in
+    `state.rs` / `runtime.rs`, and an end-to-end
+    `obscura-browser/tests/extension_request_headers.rs` driving the real
+    chrome-shim + V8 runtime.
+- **`document.referrer`.** The `Document` object now exposes `referrer`
+  (previously `undefined`). It's threaded from the navigation's referrer,
+  including any an extension rewrote in. Sites and anti-bot/paywall logic
+  commonly gate behaviour on `document.referrer`; exposing it makes
+  headless renders match a real browser. (`obscura-js`, 2 tests)
+
 ### Fixed
 
 - **WSJ (DataDome) now loads under `--stealth`.** WSJ articles were

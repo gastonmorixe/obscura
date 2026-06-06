@@ -1644,6 +1644,7 @@ dependencies = [
  "obscura-js",
  "obscura-net",
  "serde_json",
+ "tempdir",
  "thiserror",
  "tokio",
  "tracing",

@@ -273,4 +273,129 @@ try {
 "#
         )
     }
+
+    /// JS expression that serialises the extension's accumulated
+    /// `declarativeNetRequest` session + dynamic rules to a JSON array
+    /// string. The host evaluates this in the extension realm AFTER the
+    /// background scripts have run, then feeds the result to
+    /// [`ingest_dnr_rules_json`]. Returns `"[]"` if the global is absent.
+    pub const DNR_HARVEST_EXPR: &'static str = "(function(){\
+        try{var s=globalThis.__obscura_ext_dnr_rules;\
+        if(!s)return '[]';\
+        var out=[];\
+        for(var k in s.session)out.push(s.session[k]);\
+        for(var k in s.dynamic)out.push(s.dynamic[k]);\
+        return JSON.stringify(out);}catch(e){return '[]';}})()";
+
+    /// Parse a JSON array of `declarativeNetRequest` rules (as produced by
+    /// [`DNR_HARVEST_EXPR`]) and store every `modifyHeaders` request-header
+    /// rule in the extension state. Other rule types are ignored here (block
+    /// rules go through the separate `dnr_block` path). Returns the count of
+    /// header rules ingested.
+    pub fn ingest_dnr_rules_json(&self, json: &str) -> usize {
+        let parsed: Value = match serde_json::from_str(json) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::debug!("obscura-ext: DNR harvest parse failed: {e}");
+                return 0;
+            }
+        };
+        let Some(arr) = parsed.as_array() else {
+            return 0;
+        };
+        let mut n = 0;
+        for rule in arr {
+            if self.state.add_dnr_rule(rule) {
+                n += 1;
+            }
+        }
+        if n > 0 {
+            tracing::info!("obscura-ext: ingested {n} declarativeNetRequest header rule(s)");
+        }
+        n
+    }
+
+    /// Resolve the request-header rewrites the extension wants applied to a
+    /// top-level document fetch of `url`. Returns `{header => Some(value)}`
+    /// to set and `{header => None}` to remove. Empty when nothing matches.
+    pub fn resolved_request_headers(
+        &self,
+        url: &str,
+    ) -> std::collections::HashMap<String, Option<String>> {
+        self.state.matched_request_headers(url, "main_frame")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn runtime_for(host_pattern: &str) -> ExtensionRuntime {
+        let dir = tempdir::TempDir::new("obscura-ext-rt-test").unwrap();
+        std::fs::write(
+            dir.path().join("manifest.json"),
+            format!(
+                r#"{{ "manifest_version": 2, "name": "T", "version": "1.0",
+                     "background": {{ "scripts": ["bg.js"] }},
+                     "permissions": ["{host_pattern}", "declarativeNetRequest"] }}"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("bg.js"), "// bg").unwrap();
+        let bundle = Bundle::load(dir.path()).expect("load");
+        // Keep the temp dir alive for the duration by leaking it: the test
+        // process is short-lived and the bundle already read all files into
+        // memory at load, so the dir is no longer needed after this point.
+        std::mem::forget(dir);
+        ExtensionRuntime::new(Arc::new(bundle))
+    }
+
+    const WSJ_HARVEST: &str = r#"[
+        {"id":7,"priority":1,
+         "action":{"type":"modifyHeaders","requestHeaders":[
+            {"header":"Referer","operation":"set","value":"https://www.drudgereport.com/"}]},
+         "condition":{"urlFilter":"||wsj.com",
+            "resourceTypes":["main_frame","sub_frame","xmlhttprequest","script"]}},
+        {"id":99,"priority":1,
+         "action":{"type":"block"},
+         "condition":{"urlFilter":"ads"}}
+    ]"#;
+
+    #[test]
+    fn ingest_then_resolve_referer_for_wsj() {
+        let rt = runtime_for("*://*.wsj.com/*");
+        let n = rt.ingest_dnr_rules_json(WSJ_HARVEST);
+        assert_eq!(n, 1, "only the modifyHeaders rule should be ingested");
+
+        let hdrs = rt.resolved_request_headers(
+            "https://www.wsj.com/tech/ai/meta-keeps-delaying-f8569c8c",
+        );
+        assert_eq!(
+            hdrs.get("referer"),
+            Some(&Some("https://www.drudgereport.com/".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_empty_for_unmatched_host() {
+        let rt = runtime_for("*://*.wsj.com/*");
+        rt.ingest_dnr_rules_json(WSJ_HARVEST);
+        let hdrs = rt.resolved_request_headers("https://www.nytimes.com/x");
+        assert!(hdrs.is_empty());
+    }
+
+    #[test]
+    fn malformed_harvest_json_is_safe() {
+        let rt = runtime_for("*://*/*");
+        assert_eq!(rt.ingest_dnr_rules_json("not json"), 0);
+        assert_eq!(rt.ingest_dnr_rules_json("[]"), 0);
+        assert_eq!(rt.ingest_dnr_rules_json("{}"), 0);
+    }
+
+    #[test]
+    fn harvest_expr_is_nonempty_js() {
+        // Guard against accidental truncation of the const.
+        assert!(ExtensionRuntime::DNR_HARVEST_EXPR.contains("__obscura_ext_dnr_rules"));
+        assert!(ExtensionRuntime::DNR_HARVEST_EXPR.contains("JSON.stringify"));
+    }
 }

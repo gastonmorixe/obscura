@@ -98,6 +98,14 @@ impl ObscuraJsRuntime {
         self.state.borrow_mut().title = title.to_string();
     }
 
+    /// Set `document.referrer` for the page realm. Pass the navigation's
+    /// referrer (e.g. the Referer header, including one an extension
+    /// rewrote in). Empty string means "no referrer", matching a direct
+    /// navigation.
+    pub fn set_referrer(&self, referrer: &str) {
+        self.state.borrow_mut().referrer = referrer.to_string();
+    }
+
     pub fn set_blocked_urls(&self, patterns: Vec<String>) {
         self.state.borrow_mut().blocked_urls = patterns;
     }
@@ -902,6 +910,24 @@ mod tests {
         let mut rt = setup_runtime("<html><body></body></html>");
         let url = rt.evaluate("document.URL").unwrap();
         assert_eq!(url, serde_json::json!("http://example.com/test"));
+    }
+
+    #[test]
+    fn test_document_referrer_default_empty() {
+        let mut rt = setup_runtime("<html><body></body></html>");
+        let r = rt.evaluate("document.referrer").unwrap();
+        assert_eq!(r, serde_json::json!(""));
+    }
+
+    #[test]
+    fn test_document_referrer_set() {
+        let mut rt = setup_runtime("<html><body></body></html>");
+        rt.set_referrer("https://www.drudgereport.com/");
+        let r = rt.evaluate("document.referrer").unwrap();
+        assert_eq!(r, serde_json::json!("https://www.drudgereport.com/"));
+        // typeof must be string even when empty, never undefined.
+        let t = rt.evaluate("typeof document.referrer").unwrap();
+        assert_eq!(t, serde_json::json!("string"));
     }
 
     #[test]

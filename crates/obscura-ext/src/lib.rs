@@ -18,12 +18,14 @@
 //! See `docs/extensions.md` for the architectural deep dive.
 
 pub mod bundle;
+pub mod dnr;
 pub mod host_match;
 pub mod manifest;
 pub mod runtime;
 pub mod state;
 
 pub use bundle::{Bundle, BundleError};
+pub use dnr::{HeaderOp, HeaderOperation, HeaderRule};
 pub use manifest::{ExtensionManifest, ManifestError};
 pub use runtime::ExtensionRuntime;
 pub use state::{ExtensionState, StorageArea};

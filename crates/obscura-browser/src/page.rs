@@ -132,6 +132,11 @@ pub struct Page {
     pub http_client: Arc<ObscuraHttpClient>,
     pub context: Arc<BrowserContext>,
     pub title: String,
+    /// `document.referrer` for the current navigation, threaded into the JS
+    /// realm. Set from the outgoing Referer header (including any an
+    /// attached extension rewrote in via declarativeNetRequest /
+    /// onBeforeSendHeaders). Empty = direct navigation.
+    pub referrer: String,
     pub network_events: Vec<NetworkEvent>,
     network_event_counter: u32,
     pub intercept_enabled: bool,
@@ -176,6 +181,7 @@ impl Page {
             http_client,
             context,
             title: String::new(),
+            referrer: String::new(),
             network_events: Vec::new(),
             network_event_counter: 0,
             intercept_enabled: false,
@@ -234,6 +240,7 @@ impl Page {
         );
         rt.set_url(&self.url_string());
         rt.set_title(&self.title);
+        rt.set_referrer(&self.referrer);
 
         #[cfg(feature = "stealth")]
         if self.stealth_client.is_some() {
@@ -297,6 +304,173 @@ impl Page {
                     url
                 );
             }
+        }
+    }
+
+    /// Run the attached WebExtension's background once, in a throwaway V8
+    /// realm, purely to collect the request-header rewrites it wants applied
+    /// to the top-level document fetch of `url`. Returns a merged
+    /// `{header => value}` map (empty / `None` when no extension, no match,
+    /// or no rules).
+    ///
+    /// Two extension mechanisms are honoured:
+    ///   * MV3 `declarativeNetRequest` `modifyHeaders` rules — harvested
+    ///     from the shim's rule registry, parsed by `obscura_ext::dnr`, and
+    ///     resolved against `url`.
+    ///   * MV2 blocking `webRequest.onBeforeSendHeaders` listeners — invoked
+    ///     in-realm via `__obscura_ext_collect_request_headers`, which runs
+    ///     the listener chain exactly as Chrome would for a `main_frame`
+    ///     request and returns the final header set.
+    ///
+    /// Both are merged (DNR taking precedence on a tie). A `remove`
+    /// operation from DNR is represented as an empty string here, which the
+    /// caller applies as "send empty" (BPC uses this to strip Cookie).
+    /// Test/introspection hook: run the extension request-header pre-pass
+    /// for `url` and return the resolved rewrites without performing the
+    /// document fetch. Mirrors exactly what the navigation path applies.
+    pub async fn resolve_extension_request_headers(
+        &self,
+        url: &str,
+    ) -> std::collections::HashMap<String, String> {
+        self.collect_extension_request_headers(url)
+            .await
+            .unwrap_or_default()
+    }
+
+    async fn collect_extension_request_headers(
+        &self,
+        url: &str,
+    ) -> Option<std::collections::HashMap<String, String>> {
+        let ext = self.context.extension.clone()?;
+        if !ext.matches_url(url) {
+            return None;
+        }
+
+        // Build a throwaway realm with the same wiring init_js uses, minus
+        // the real page DOM. The extension background only needs globalThis,
+        // chrome.*, storage, and timers — all provided by the preload.
+        let mut rt = ObscuraJsRuntime::with_base_url_and_proxy(
+            url,
+            self.context.proxy_url.clone(),
+        );
+        rt.set_url(url);
+        #[cfg(feature = "stealth")]
+        if self.stealth_client.is_some() {
+            rt.set_user_agent(obscura_net::STEALTH_USER_AGENT);
+        }
+        rt.set_cookie_jar(self.context.cookie_jar.clone());
+        rt.set_localstorage_store(self.context.localstorage_store.clone());
+        rt.set_http_client(self.http_client.clone());
+        // A minimal document so content-script bootstraps that poke at
+        // `document` during background init don't throw.
+        rt.set_dom(parse_html("<html><head></head><body></body></html>"));
+
+        let preload = ext.build_preload_script(url);
+        if let Err(e) = rt.execute_script_guarded("<obscura-ext:prepass>", &preload) {
+            tracing::debug!("obscura-ext: prepass preload failed: {e}");
+            // Even on partial failure the listeners/rules registered before
+            // the throw are still usable, so continue.
+        }
+
+        let mut merged: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+
+        // --- MV2 path: run onBeforeSendHeaders listeners.
+        let ua = {
+            #[cfg(feature = "stealth")]
+            {
+                if self.stealth_client.is_some() {
+                    obscura_net::STEALTH_USER_AGENT.to_string()
+                } else {
+                    self.context.user_agent.clone()
+                }
+            }
+            #[cfg(not(feature = "stealth"))]
+            {
+                self.context.user_agent.clone()
+            }
+        };
+        let base_headers = serde_json::json!([
+            {"name": "User-Agent", "value": ua},
+        ]);
+        let collect_expr = format!(
+            "(function(){{ try {{ return JSON.stringify(\
+                globalThis.__obscura_ext_collect_request_headers \
+                ? globalThis.__obscura_ext_collect_request_headers({}, {}) : {{}}); \
+             }} catch(e) {{ return '{{}}'; }} }})()",
+            serde_json::to_string(url).unwrap_or_else(|_| "\"\"".into()),
+            base_headers,
+        );
+        if let Ok(v) = rt.evaluate(&collect_expr) {
+            if let Some(s) = v.as_str() {
+                if let Ok(serde_json::Value::Object(map)) =
+                    serde_json::from_str::<serde_json::Value>(s)
+                {
+                    for (k, val) in map {
+                        if let Some(vs) = val.as_str() {
+                            // Don't echo back the UA we seeded unless the
+                            // extension actually changed it.
+                            if k.eq_ignore_ascii_case("user-agent") && vs == ua {
+                                continue;
+                            }
+                            merged.insert(k, vs.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- MV3 path: harvest declarativeNetRequest modifyHeaders rules.
+        if let Ok(v) = rt.evaluate(obscura_ext::ExtensionRuntime::DNR_HARVEST_EXPR) {
+            if let Some(s) = v.as_str() {
+                ext.ingest_dnr_rules_json(s);
+            }
+        }
+        for (k, maybe) in ext.resolved_request_headers(url) {
+            match maybe {
+                Some(val) => {
+                    merged.insert(k, val);
+                }
+                None => {
+                    // "remove": represent as empty so the apply step sends an
+                    // empty header (BPC's Cookie-strip intent).
+                    merged.insert(k, String::new());
+                }
+            }
+        }
+
+        if merged.is_empty() {
+            None
+        } else {
+            tracing::info!(
+                "obscura-ext: applying {} request-header rewrite(s) to {}: {:?}",
+                merged.len(),
+                url,
+                merged.keys().collect::<Vec<_>>(),
+            );
+            Some(merged)
+        }
+    }
+
+    /// Merge extension-provided request headers into whichever HTTP client
+    /// will perform the document fetch (stealth wreq or plain reqwest).
+    /// Existing extra headers are preserved; the extension's win on a key
+    /// collision.
+    async fn apply_extension_request_headers(
+        &self,
+        headers: std::collections::HashMap<String, String>,
+    ) {
+        #[cfg(feature = "stealth")]
+        if let Some(stealth) = &self.stealth_client {
+            let mut guard = stealth.extra_headers.write().await;
+            for (k, v) in headers {
+                guard.insert(k, v);
+            }
+            return;
+        }
+        let mut guard = self.http_client.extra_headers.write().await;
+        for (k, v) in headers {
+            guard.insert(k, v);
         }
     }
 
@@ -666,6 +840,33 @@ impl Page {
             self.navigate_blank();
             self.init_js();
             return Ok(());
+        }
+
+        // Extension request-header pre-pass. If a WebExtension is attached
+        // and in-scope for this URL, run its background once in a throwaway
+        // realm to collect any request-header rewrites it wants on the
+        // top-level document (e.g. Bypass Paywalls Clean setting
+        // `Referer: drudgereport` so WSJ serves the full article). The
+        // resulting headers are applied to the document fetch below. Only
+        // for http(s) GET navigations — data:/POST/file don't apply.
+        if url.scheme() == "http" || url.scheme() == "https" {
+            if let Some(extra) = self.collect_extension_request_headers(url_str).await {
+                if !extra.is_empty() {
+                    // Mirror any rewritten Referer into document.referrer so the
+                    // page's own JS (which may gate content on it) sees what a
+                    // real browser would after a referred navigation.
+                    if let Some(referer) = extra
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case("referer"))
+                        .map(|(_, v)| v.clone())
+                    {
+                        if !referer.is_empty() {
+                            self.referrer = referer;
+                        }
+                    }
+                    self.apply_extension_request_headers(extra).await;
+                }
+            }
         }
 
         let response = if url.scheme() == "data" {

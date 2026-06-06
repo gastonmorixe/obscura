@@ -237,19 +237,145 @@
     return Promise.resolve(out);
   }
 
-  // ---- webRequest: register listeners but no synchronous interception.
-  // Extensions whose effect is pure DOM mutation don't need this; we
-  // keep listeners only
-  // to prevent extension bg-script code paths from null-deref'ing on
-  // the event objects' addListener returns. A future change can route
-  // these through Rust-side RequestInterceptor.
+  // ---- webRequest: record listeners so the host can run the
+  // request-header rewrites (blocking `onBeforeSendHeaders`) that MV2
+  // paywall extensions use to set Referer / User-Agent on the top-level
+  // document. The host invokes `__obscura_ext_collect_request_headers`
+  // BEFORE fetching the document, applies the result to the outbound
+  // request, and the page comes back unlocked. Listeners for other events
+  // are still recorded (harmlessly unused) so bg code paths don't break.
+  globalThis.__obscura_ext_wr_listeners = globalThis.__obscura_ext_wr_listeners || {};
   function _mkWREvent(name) {
+    const reg = globalThis.__obscura_ext_wr_listeners;
+    reg[name] = reg[name] || [];
     return {
-      addListener() {},
-      removeListener() {},
-      hasListener() { return false; },
-      hasListeners() { return false; },
+      addListener(fn /*, filter, extraInfoSpec */) {
+        if (typeof fn === "function") reg[name].push(fn);
+      },
+      removeListener(fn) {
+        const arr = reg[name];
+        if (!arr) return;
+        const i = arr.indexOf(fn);
+        if (i >= 0) arr.splice(i, 1);
+      },
+      hasListener(fn) { return (reg[name] || []).includes(fn); },
+      hasListeners() { return (reg[name] || []).length > 0; },
       __name: name,
+    };
+  }
+
+  // Run all registered `onBeforeSendHeaders` listeners against a synthetic
+  // request for `url` (resourceType `main_frame`), threading each listener's
+  // `{requestHeaders}` return into the next, exactly as Chrome does for
+  // blocking listeners. `baseHeaders` is an array of {name,value} the host
+  // will actually send (so the extension can rewrite an existing Referer /
+  // User-Agent in place). Returns the final header array as a {name:value}
+  // object (last write wins). Safe to call with no listeners — returns {}.
+  globalThis.__obscura_ext_collect_request_headers = function (url, baseHeaders) {
+    const reg = globalThis.__obscura_ext_wr_listeners || {};
+    const listeners = reg["onBeforeSendHeaders"] || [];
+    let headers = Array.isArray(baseHeaders) ? baseHeaders.map(h => ({ name: h.name, value: h.value })) : [];
+    const details = {
+      url: url,
+      method: "GET",
+      type: "main_frame",
+      tabId: (globalThis.__obscura_ext_tab_id || 1),
+      frameId: 0,
+      requestId: String(Date.now()),
+      timeStamp: Date.now(),
+      requestHeaders: headers,
+    };
+    for (const fn of listeners) {
+      try {
+        const ret = fn(details);
+        if (ret && Array.isArray(ret.requestHeaders)) {
+          details.requestHeaders = ret.requestHeaders;
+        }
+      } catch (e) {
+        console.error("obscura-ext: onBeforeSendHeaders listener threw:", e && e.stack || e);
+      }
+    }
+    const out = {};
+    for (const h of details.requestHeaders) {
+      if (h && typeof h.name === "string") out[h.name] = h.value;
+    }
+    return out;
+  };
+
+  // ---- declarativeNetRequest -------------------------------------------
+  // Real Chrome applies these rules inside the network stack. Obscura's
+  // network stack is in Rust, so the shim's job is to faithfully maintain
+  // the session/dynamic rule set in a realm global
+  // (`__obscura_ext_dnr_rules`) that the host harvests AFTER the background
+  // scripts run and BEFORE the top-level document is (re)fetched. The host
+  // only acts on `modifyHeaders` request-header rules today (see
+  // `obscura_ext::dnr`); other rule types are stored verbatim so
+  // `getSessionRules()` round-trips correctly for extensions that read
+  // their own rules back.
+  globalThis.__obscura_ext_dnr_rules = globalThis.__obscura_ext_dnr_rules || {
+    session: {},  // id -> rule
+    dynamic: {},  // id -> rule
+  };
+  function _mkDNR() {
+    const store = globalThis.__obscura_ext_dnr_rules;
+    function _update(bucket, opts) {
+      opts = opts || {};
+      const removeIds = opts.removeRuleIds || [];
+      for (const id of removeIds) delete bucket[id];
+      const addRules = opts.addRules || [];
+      for (const rule of addRules) {
+        if (rule && rule.id != null) bucket[rule.id] = rule;
+      }
+    }
+    return {
+      updateSessionRules(opts, cb) {
+        try { _update(store.session, opts); } catch (e) { console.error("updateSessionRules:", e); }
+        if (typeof cb === "function") Promise.resolve().then(cb);
+        return Promise.resolve();
+      },
+      updateDynamicRules(opts, cb) {
+        try { _update(store.dynamic, opts); } catch (e) { console.error("updateDynamicRules:", e); }
+        if (typeof cb === "function") Promise.resolve().then(cb);
+        return Promise.resolve();
+      },
+      getSessionRules(cb) {
+        const rules = Object.values(store.session);
+        if (typeof cb === "function") Promise.resolve().then(() => cb(rules));
+        return Promise.resolve(rules);
+      },
+      getDynamicRules(cb) {
+        const rules = Object.values(store.dynamic);
+        if (typeof cb === "function") Promise.resolve().then(() => cb(rules));
+        return Promise.resolve(rules);
+      },
+      getEnabledRulesets(cb) {
+        if (typeof cb === "function") Promise.resolve().then(() => cb([]));
+        return Promise.resolve([]);
+      },
+      updateEnabledRulesets(_opts, cb) {
+        if (typeof cb === "function") Promise.resolve().then(cb);
+        return Promise.resolve();
+      },
+      getAvailableStaticRuleCount(cb) {
+        if (typeof cb === "function") Promise.resolve().then(() => cb(30000));
+        return Promise.resolve(30000);
+      },
+      setExtensionActionOptions(_opts, cb) {
+        if (typeof cb === "function") Promise.resolve().then(cb);
+        return Promise.resolve();
+      },
+      isRegexSupported(_opts, cb) {
+        const r = { isSupported: true };
+        if (typeof cb === "function") Promise.resolve().then(() => cb(r));
+        return Promise.resolve(r);
+      },
+      onRuleMatchedDebug: { addListener() {}, removeListener() {}, hasListener() { return false; } },
+      MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES: 30000,
+      MAX_NUMBER_OF_SESSION_RULES: 5000,
+      MAX_NUMBER_OF_DYNAMIC_RULES: 30000,
+      MAX_NUMBER_OF_REGEX_RULES: 1000,
+      DYNAMIC_RULESET_ID: "_dynamic",
+      SESSION_RULESET_ID: "_session",
     };
   }
 
@@ -462,15 +588,7 @@
       OnHeadersReceivedOptions: { EXTRA_HEADERS: "extraHeaders", BLOCKING: "blocking", RESPONSE_HEADERS: "responseHeaders" },
       handlerBehaviorChanged(cb) { if (typeof cb === "function") Promise.resolve().then(cb); return Promise.resolve(); },
     },
-    declarativeNetRequest: {
-      updateSessionRules(_opts, cb) { if (typeof cb === "function") Promise.resolve().then(cb); return Promise.resolve(); },
-      updateDynamicRules(_opts, cb) { if (typeof cb === "function") Promise.resolve().then(cb); return Promise.resolve(); },
-      getSessionRules(cb) { if (typeof cb === "function") Promise.resolve().then(() => cb([])); return Promise.resolve([]); },
-      getDynamicRules(cb) { if (typeof cb === "function") Promise.resolve().then(() => cb([])); return Promise.resolve([]); },
-      getEnabledRulesets(cb) { if (typeof cb === "function") Promise.resolve().then(() => cb([])); return Promise.resolve([]); },
-      MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES: 30000,
-      MAX_NUMBER_OF_REGEX_RULES: 1000,
-    },
+    declarativeNetRequest: _mkDNR(),
     action: {
       setBadgeText() {},
       setBadgeBackgroundColor() {},

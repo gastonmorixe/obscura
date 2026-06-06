@@ -13,9 +13,12 @@
 //! No `unsafe`, no `tokio` dependency on purpose — this is a plain Rust
 //! data layer. The async / V8 plumbing lives in the consumer crates.
 
+use std::collections::HashMap;
 use std::sync::{Mutex, RwLock};
 
 use serde_json::Value;
+
+use crate::dnr::{HeaderOperation, HeaderRule};
 
 /// `chrome.storage.local` / `chrome.storage.sync` / `chrome.storage.session`.
 /// Obscura collapses all three to the same in-memory map keyed by area
@@ -113,6 +116,13 @@ pub struct ExtensionState {
     /// as a webRequest listener (MV2) and once as a DNR rule (MV3) — and
     /// we want the lighter-weight path to win.
     dnr_block_substrings: RwLock<Vec<String>>,
+    /// `declarativeNetRequest` session/dynamic rules whose action is
+    /// `modifyHeaders` with `requestHeaders`. Keyed by rule id so a later
+    /// `updateSessionRules({removeRuleIds})` (or a re-add of the same id)
+    /// replaces rather than duplicates. This is how paywall extensions set
+    /// the `Referer` / `User-Agent` that unlock the full article on the
+    /// top-level document fetch. See `crate::dnr`.
+    header_rules: RwLock<HashMap<i64, HeaderRule>>,
 }
 
 impl ExtensionState {
@@ -149,5 +159,194 @@ impl ExtensionState {
 
     pub fn dnr_blocks(&self) -> Vec<String> {
         self.dnr_block_substrings.read().unwrap().clone()
+    }
+
+    /// Ingest one `declarativeNetRequest` rule's JSON. No-op unless it's a
+    /// `modifyHeaders` request-header rule (see `HeaderRule::from_json`).
+    /// Returns true if the rule was stored.
+    pub fn add_dnr_rule(&self, rule_json: &Value) -> bool {
+        if let Some(rule) = HeaderRule::from_json(rule_json) {
+            self.header_rules.write().unwrap().insert(rule.id, rule);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove a stored header rule by id (for
+    /// `updateSessionRules({removeRuleIds})`).
+    pub fn remove_dnr_rule(&self, id: i64) {
+        self.header_rules.write().unwrap().remove(&id);
+    }
+
+    /// All stored header-rewrite rules, lowest-priority first. Mostly for
+    /// tests / introspection.
+    pub fn header_rules(&self) -> Vec<HeaderRule> {
+        let mut v: Vec<HeaderRule> =
+            self.header_rules.read().unwrap().values().cloned().collect();
+        v.sort_by_key(|r| r.priority);
+        v
+    }
+
+    /// Resolve the request-header modifications that apply to `url` for the
+    /// given `resource_type` (e.g. `"main_frame"`), folding every matching
+    /// `modifyHeaders` rule into a final `{header => Option<value>}` map.
+    ///
+    /// `Some(value)` means "set this header to value" (covers `set`; and
+    /// `append`, which we collapse to set since Obscura's outbound request
+    /// starts with no extension-managed headers). `None` means "remove this
+    /// header". Rules are applied in ascending `priority` so that, on a tie
+    /// of header name, the higher-priority rule wins (matching DNR's
+    /// "higher priority applied later / wins" ordering closely enough for
+    /// the single-extension paywall case).
+    ///
+    /// Returns an empty map when nothing matches, so callers can cheaply
+    /// skip the no-rule path.
+    pub fn matched_request_headers(
+        &self,
+        url: &str,
+        resource_type: &str,
+    ) -> HashMap<String, Option<String>> {
+        let mut rules: Vec<HeaderRule> = self
+            .header_rules
+            .read()
+            .unwrap()
+            .values()
+            .filter(|r| r.matches(url, resource_type))
+            .cloned()
+            .collect();
+        rules.sort_by_key(|r| r.priority);
+
+        let mut out: HashMap<String, Option<String>> = HashMap::new();
+        for rule in rules {
+            for op in &rule.request_headers {
+                match op.operation {
+                    HeaderOperation::Set | HeaderOperation::Append => {
+                        if let Some(v) = &op.value {
+                            out.insert(op.header.clone(), Some(v.clone()));
+                        }
+                    }
+                    HeaderOperation::Remove => {
+                        out.insert(op.header.clone(), None);
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn wsj_referer_rule() -> Value {
+        json!({
+            "id": 7,
+            "priority": 1,
+            "action": {
+                "type": "modifyHeaders",
+                "requestHeaders": [
+                    {"header": "Referer", "operation": "set",
+                     "value": "https://www.drudgereport.com/"},
+                    {"header": "Cookie", "operation": "set", "value": ""}
+                ]
+            },
+            "condition": {
+                "urlFilter": "||wsj.com",
+                "resourceTypes": ["main_frame", "sub_frame", "xmlhttprequest", "script"]
+            }
+        })
+    }
+
+    #[test]
+    fn stores_modify_headers_rule_and_matches_main_frame() {
+        let st = ExtensionState::new();
+        assert!(st.add_dnr_rule(&wsj_referer_rule()));
+        assert_eq!(st.header_rules().len(), 1);
+
+        let hdrs = st.matched_request_headers(
+            "https://www.wsj.com/tech/ai/meta-keeps-delaying-f8569c8c",
+            "main_frame",
+        );
+        assert_eq!(
+            hdrs.get("referer"),
+            Some(&Some("https://www.drudgereport.com/".to_string()))
+        );
+        assert_eq!(hdrs.get("cookie"), Some(&Some(String::new())));
+    }
+
+    #[test]
+    fn no_match_for_other_host() {
+        let st = ExtensionState::new();
+        st.add_dnr_rule(&wsj_referer_rule());
+        let hdrs = st.matched_request_headers("https://www.nytimes.com/x", "main_frame");
+        assert!(hdrs.is_empty());
+    }
+
+    #[test]
+    fn block_rule_is_not_stored_as_header_rule() {
+        let st = ExtensionState::new();
+        let block = json!({
+            "id": 1, "priority": 1,
+            "action": {"type": "block"},
+            "condition": {"urlFilter": "ads"}
+        });
+        assert!(!st.add_dnr_rule(&block));
+        assert!(st.header_rules().is_empty());
+    }
+
+    #[test]
+    fn re_adding_same_id_replaces_not_duplicates() {
+        let st = ExtensionState::new();
+        st.add_dnr_rule(&wsj_referer_rule());
+        st.add_dnr_rule(&wsj_referer_rule());
+        assert_eq!(st.header_rules().len(), 1);
+    }
+
+    #[test]
+    fn remove_rule_by_id() {
+        let st = ExtensionState::new();
+        st.add_dnr_rule(&wsj_referer_rule());
+        st.remove_dnr_rule(7);
+        assert!(st.header_rules().is_empty());
+        let hdrs = st.matched_request_headers("https://www.wsj.com/x", "main_frame");
+        assert!(hdrs.is_empty());
+    }
+
+    #[test]
+    fn higher_priority_wins_on_same_header() {
+        let st = ExtensionState::new();
+        st.add_dnr_rule(&json!({
+            "id": 1, "priority": 1,
+            "action": {"type": "modifyHeaders", "requestHeaders": [
+                {"header": "Referer", "operation": "set", "value": "https://low/"}
+            ]},
+            "condition": {"urlFilter": "||wsj.com"}
+        }));
+        st.add_dnr_rule(&json!({
+            "id": 2, "priority": 5,
+            "action": {"type": "modifyHeaders", "requestHeaders": [
+                {"header": "Referer", "operation": "set", "value": "https://high/"}
+            ]},
+            "condition": {"urlFilter": "||wsj.com"}
+        }));
+        let hdrs = st.matched_request_headers("https://www.wsj.com/x", "main_frame");
+        assert_eq!(hdrs.get("referer"), Some(&Some("https://high/".to_string())));
+    }
+
+    #[test]
+    fn remove_operation_yields_none() {
+        let st = ExtensionState::new();
+        st.add_dnr_rule(&json!({
+            "id": 1, "priority": 1,
+            "action": {"type": "modifyHeaders", "requestHeaders": [
+                {"header": "Cookie", "operation": "remove"}
+            ]},
+            "condition": {"urlFilter": "||wsj.com"}
+        }));
+        let hdrs = st.matched_request_headers("https://www.wsj.com/x", "main_frame");
+        assert_eq!(hdrs.get("cookie"), Some(&None));
     }
 }

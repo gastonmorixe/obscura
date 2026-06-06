@@ -911,6 +911,7 @@ class Document extends Node {
   set title(v) {}
   get URL() { return _domParse("document_url") ?? ""; }
   get documentURI() { return this.URL; }
+  get referrer() { return _domParse("document_referrer") ?? ""; }
   get location() { return globalThis.location; }
   set location(url) { Deno.core.ops.op_navigate(_resolveUrl(String(url)), 'GET', ''); }
   get defaultView() { return globalThis; }

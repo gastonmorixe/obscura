@@ -42,6 +42,11 @@ pub struct ObscuraState {
     pub dom: Option<DomTree>,
     pub url: String,
     pub title: String,
+    /// `document.referrer`. Real browsers expose the navigation's referrer
+    /// here; some sites (and paywall/anti-bot logic) gate behaviour on it.
+    /// Set from the navigation's Referer (including any the attached
+    /// extension rewrote in) so headless renders match a real browser.
+    pub referrer: String,
     pub blocked_urls: Vec<String>,
     pub cookie_jar: Option<Arc<CookieJar>>,
     /// Process-wide localStorage backing store. Set by
@@ -63,6 +68,7 @@ impl ObscuraState {
             dom: None,
             url: "about:blank".to_string(),
             title: String::new(),
+            referrer: String::new(),
             blocked_urls: Vec::new(),
             cookie_jar: None,
             localstorage_store: None,
@@ -91,6 +97,7 @@ fn op_dom(state: &OpState, #[string] cmd: String, #[string] arg1: String, #[stri
         "document_node_id" => dom.document().index().to_string(),
         "document_title" => serde_json::to_string(&gs.title).unwrap_or("\"\"".into()),
         "document_url" => serde_json::to_string(&gs.url).unwrap_or("\"\"".into()),
+        "document_referrer" => serde_json::to_string(&gs.referrer).unwrap_or("\"\"".into()),
         "document_element" => {
             for cid in dom.children(dom.document()) {
                 if let Some(n) = dom.get_node(cid) {
