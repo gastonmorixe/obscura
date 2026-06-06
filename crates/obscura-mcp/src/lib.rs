@@ -20,7 +20,7 @@ struct RpcMessage {
 }
 
 #[derive(Serialize)]
-struct RpcResponse {
+pub struct RpcResponse {
     jsonrpc: &'static str,
     id: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -30,7 +30,7 @@ struct RpcResponse {
 }
 
 #[derive(Serialize)]
-struct RpcError {
+pub struct RpcError {
     code: i32,
     message: String,
 }
