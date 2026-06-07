@@ -50,8 +50,13 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             name: obscura-aarch64-macos
+          # Intel macOS runner (macos-13 is the last x86_64 image). Building
+          # x86_64-apple-darwin on the now-arm64 macos-latest cross-compiles
+          # BoringSSL (boring-sys2), and clang picks the host arm64 SDK headers
+          # incorrectly ("unknown type name 'uint32_t'"), failing the build.
+          # Compiling natively on an Intel runner sidesteps the cross-SDK mess.
           - target: x86_64-apple-darwin
-            os: macos-latest
+            os: macos-13
             name: obscura-x86_64-macos
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-22.04-arm
