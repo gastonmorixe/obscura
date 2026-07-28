@@ -186,7 +186,10 @@ impl DomTree {
 
         if let NodeData::Element { ref attrs, .. } = data {
             if let Some(id_attr) = attrs.iter().find(|a| a.name.local.as_ref() == "id") {
-                inner.id_index.insert(id_attr.value.clone(), id);
+                // Keep the FIRST element created with a given id. Parse order is
+                // document order, so getElementById / querySelector('#id') return
+                // the first-in-tree-order element on duplicate ids, per spec.
+                inner.id_index.entry(id_attr.value.clone()).or_insert(id);
             }
         }
 
@@ -223,6 +226,48 @@ impl DomTree {
     }
 
     pub fn append_child(&self, parent_id: NodeId, child_id: NodeId) {
+        // Per DOM spec, appending a node to itself is a HierarchyRequestError;
+        // here we treat it as a no-op rather than panic. Without this the
+        // sibling-pointer fixup below sets the node's prev_sibling to itself
+        // and every later child-walk loops forever (same failure mode that
+        // insert_before's self-cycle guard was added to prevent).
+        if parent_id == child_id {
+            return;
+        }
+        // Appending an ancestor of the parent under that parent makes the
+        // parent/child graph cyclic, and every later descendants()/children()/
+        // textContent walk (none carry a visited set) would loop forever, pinning
+        // the thread in native Rust where neither tokio nor the V8 watchdog can
+        // interrupt it. Per the DOM spec this is a HierarchyRequestError; treat it
+        // as a no-op, like the self-append guard above. Only a node that already
+        // has children can be an ancestor, so a fresh/leaf child (the common
+        // append) skips the walk: O(1) hot path, O(depth) only when relocating a
+        // populated subtree.
+        {
+            let inner = self.inner.borrow();
+            let child_has_children = inner.nodes.get(child_id.index())
+                .and_then(|n| n.as_ref())
+                .map(|n| n.first_child.is_some())
+                .unwrap_or(false);
+            if child_has_children {
+                let mut cur = inner.nodes.get(parent_id.index())
+                    .and_then(|n| n.as_ref())
+                    .and_then(|n| n.parent);
+                let mut steps = 0usize;
+                while let Some(p) = cur {
+                    if p == child_id {
+                        return;
+                    }
+                    steps += 1;
+                    if steps > inner.nodes.len() {
+                        return; // pre-existing corruption: refuse rather than risk a cycle
+                    }
+                    cur = inner.nodes.get(p.index())
+                        .and_then(|n| n.as_ref())
+                        .and_then(|n| n.parent);
+                }
+            }
+        }
         self.detach(child_id);
 
         let mut inner = self.inner.borrow_mut();
@@ -252,19 +297,64 @@ impl DomTree {
     }
 
     pub fn insert_before(&self, existing_id: NodeId, new_sibling_id: NodeId) {
-        let (parent_id, prev_id) = {
+        // Per DOM spec: if the node being inserted IS the reference node,
+        // the operation is a no-op (the node is already in its target
+        // position). Without this, the linked-list fixup below sets the
+        // node's prev_sibling and next_sibling to itself, creating a cycle
+        // -- every later traversal (childNodes, querySelectorAll, etc) then
+        // loops forever and the test page hangs while obscura burns RAM.
+        if existing_id == new_sibling_id {
+            return;
+        }
+        let parent_id = {
             let inner = self.inner.borrow();
-            let node = match inner.nodes.get(existing_id.index()).and_then(|n| n.as_ref()) {
-                Some(n) => n,
-                None => return,
-            };
-            match node.parent {
-                Some(p) => (p, node.prev_sibling),
+            match inner.nodes.get(existing_id.index()).and_then(|n| n.as_ref()).and_then(|n| n.parent) {
+                Some(p) => p,
                 None => return,
             }
         };
 
+        // Inserting the parent itself, or any ancestor of the parent, as a child
+        // of that parent would create a cycle (same non-terminating-walk hang as
+        // append_child). Reject it, matching the self-insert guard above. Gate on
+        // the inserted node actually having children, so the common case (insert a
+        // fresh node) stays O(1).
+        {
+            let inner = self.inner.borrow();
+            let new_has_children = inner.nodes.get(new_sibling_id.index())
+                .and_then(|n| n.as_ref())
+                .map(|n| n.first_child.is_some())
+                .unwrap_or(false);
+            if new_has_children {
+                let mut cur = Some(parent_id);
+                let mut steps = 0usize;
+                while let Some(p) = cur {
+                    if p == new_sibling_id {
+                        return;
+                    }
+                    steps += 1;
+                    if steps > inner.nodes.len() {
+                        return;
+                    }
+                    cur = inner.nodes.get(p.index())
+                        .and_then(|n| n.as_ref())
+                        .and_then(|n| n.parent);
+                }
+            }
+        }
+
         self.detach(new_sibling_id);
+
+        // Read existing's prev AFTER detaching new. If new was existing's
+        // immediate previous sibling, detach moved that pointer; using the
+        // pre-detach value would splice new.next_sibling = new (a self-cycle)
+        // and hang every later sibling walk. This is what hung ebay.com.
+        let prev_id = {
+            let inner = self.inner.borrow();
+            inner.nodes.get(existing_id.index())
+                .and_then(|n| n.as_ref())
+                .and_then(|n| n.prev_sibling)
+        };
 
         let mut inner = self.inner.borrow_mut();
 
@@ -413,6 +503,10 @@ impl DomTree {
         let mut children_to_push = Vec::new();
         while let Some(child_id) = first {
             children_to_push.push(child_id);
+            if children_to_push.len() > inner.nodes.len() {
+                eprintln!("obscura: sibling-chain cap hit at node {} - cycle", node_id.index());
+                break;
+            }
             first = inner.nodes.get(child_id.index())
                 .and_then(|n| n.as_ref())
                 .and_then(|n| n.next_sibling);
@@ -423,6 +517,19 @@ impl DomTree {
 
         while let Some(current) = stack.pop() {
             result.push(current);
+            // Defense in depth: a well-formed subtree has at most nodes.len()
+            // descendants. Exceeding that means the parent/child graph is cyclic
+            // (which the append_child / insert_before guards prevent); stop rather
+            // than grow the stack and result forever and wedge the engine. On a
+            // valid tree this bound is never reached, so the hot path is unchanged.
+            if result.len() > inner.nodes.len() {
+                eprintln!(
+                    "obscura: descendants() cap hit at node {} ({} nodes) - tree has a cycle",
+                    node_id.index(),
+                    inner.nodes.len()
+                );
+                break;
+            }
 
             let mut child = inner.nodes.get(current.index())
                 .and_then(|n| n.as_ref())
@@ -430,6 +537,10 @@ impl DomTree {
             let mut children_to_push = Vec::new();
             while let Some(child_id) = child {
                 children_to_push.push(child_id);
+                if children_to_push.len() > inner.nodes.len() {
+                    eprintln!("obscura: sibling-chain cap hit at node {} - cycle", current.index());
+                    break;
+                }
                 child = inner.nodes.get(child_id.index())
                     .and_then(|n| n.as_ref())
                     .and_then(|n| n.next_sibling);
@@ -440,6 +551,126 @@ impl DomTree {
         }
 
         result
+    }
+
+    /// Returns the node after `current` in document order, without leaving the
+    /// subtree rooted at `root`.
+    ///
+    /// Keeping the ancestor climb inside the DOM avoids one JS/native crossing
+    /// per ancestor when a TreeWalker reaches a deep leaf.
+    pub fn next_in_subtree(&self, root: NodeId, current: NodeId) -> Option<NodeId> {
+        let inner = self.inner.borrow();
+        let current_node = inner.nodes.get(current.index())?.as_ref()?;
+        if let Some(child) = current_node.first_child {
+            return Some(child);
+        }
+        Self::climb_to_next_sibling(&inner, root, current)
+    }
+
+    /// Returns the node after the whole subtree rooted at `current`, in document
+    /// order, without leaving the subtree rooted at `root`.
+    ///
+    /// This is `next_in_subtree` minus the descend-into-children step, which is
+    /// what `NodeFilter.FILTER_REJECT` needs: it rejects a node *and* its
+    /// descendants, unlike `FILTER_SKIP`, which only skips the node itself and
+    /// is served by `next_in_subtree`.
+    pub fn next_after_subtree(&self, root: NodeId, current: NodeId) -> Option<NodeId> {
+        let inner = self.inner.borrow();
+        Self::climb_to_next_sibling(&inner, root, current)
+    }
+
+    /// Returns the node before `current` in document order, without leaving the
+    /// subtree rooted at `root`. `root` has no predecessor within its own
+    /// subtree, but it is itself reachable as one — a NodeIterator can return
+    /// its root, unlike a TreeWalker.
+    ///
+    /// A NodeIterator applies no subtree pruning (DOM 6.2: FILTER_REJECT
+    /// behaves as FILTER_SKIP), so unlike the TreeWalker's backward walk the
+    /// whole step fits here instead of being interleaved with filter calls.
+    pub fn prev_in_subtree(&self, root: NodeId, current: NodeId) -> Option<NodeId> {
+        let inner = self.inner.borrow();
+        if current == root {
+            return None;
+        }
+        let current_node = inner.nodes.get(current.index())?.as_ref()?;
+
+        let Some(prev) = current_node.prev_sibling else {
+            // No previous sibling: the parent immediately precedes `current`.
+            return current_node.parent;
+        };
+
+        // Otherwise it is the previous sibling's deepest last descendant.
+        let mut node_id = prev;
+        for _ in 0..=inner.nodes.len() {
+            let node = inner.nodes.get(node_id.index())?.as_ref()?;
+            match node.last_child {
+                Some(child) => node_id = child,
+                None => return Some(node_id),
+            }
+        }
+
+        // Same defense in depth as the forward walk: a malformed tree must not
+        // spin here.
+        None
+    }
+
+    /// Follow `current`'s next sibling, climbing ancestors until one has a next
+    /// sibling — without stepping outside `root`.
+    fn climb_to_next_sibling(
+        inner: &DomTreeInner,
+        root: NodeId,
+        current: NodeId,
+    ) -> Option<NodeId> {
+        let mut node_id = current;
+        for _ in 0..=inner.nodes.len() {
+            if node_id == root {
+                return None;
+            }
+            let node = inner.nodes.get(node_id.index())?.as_ref()?;
+            if let Some(sibling) = node.next_sibling {
+                return Some(sibling);
+            }
+            node_id = node.parent?;
+        }
+
+        // Parent cycles are prevented by the mutation APIs. Keep a hard bound
+        // here as defense in depth for a malformed tree.
+        None
+    }
+
+    /// The node holding a `<template>` element's contents.
+    ///
+    /// The parser puts template children in a separate contents document rather
+    /// than under the element (HTML spec), so this is the only way to reach
+    /// them. Templates built with `createElement` have no contents node yet, so
+    /// one is allocated on demand — `.content` must be usable either way.
+    ///
+    /// Returns `None` for a non-element node.
+    pub fn template_contents(&self, node_id: NodeId) -> Option<NodeId> {
+        {
+            let inner = self.inner.borrow();
+            let node = inner.nodes.get(node_id.index())?.as_ref()?;
+            match &node.data {
+                NodeData::Element { template_contents, .. } => {
+                    if let Some(existing) = *template_contents {
+                        return Some(existing);
+                    }
+                }
+                _ => return None,
+            }
+        }
+
+        // Borrow released above: `new_node` takes its own mutable borrow.
+        // Matches what the tree sink allocates for a parsed template.
+        let contents = self.new_node(NodeData::Document);
+        let mut inner = self.inner.borrow_mut();
+        if let Some(Some(node)) = inner.nodes.get_mut(node_id.index()) {
+            if let NodeData::Element { template_contents, .. } = &mut node.data {
+                *template_contents = Some(contents);
+                return Some(contents);
+            }
+        }
+        None
     }
 
     pub fn ancestors(&self, node_id: NodeId) -> Vec<NodeId> {
@@ -463,6 +694,20 @@ impl DomTree {
 
     pub fn text_content(&self, node_id: NodeId) -> String {
         let inner = self.inner.borrow();
+        // Per DOM spec, calling textContent ON a CharacterData node
+        // (Text, Comment, ProcessingInstruction) returns its .data.
+        // Calling textContent on an Element walks descendants and
+        // concatenates Text node content only (Comment + PI are
+        // skipped). Handle the direct-CharacterData case here so the
+        // descent helper can keep its element-centric behavior.
+        if let Some(Some(node)) = inner.nodes.get(node_id.index()) {
+            match &node.data {
+                NodeData::Text { contents } => return contents.clone(),
+                NodeData::Comment { contents } => return contents.clone(),
+                NodeData::ProcessingInstruction { data, .. } => return data.clone(),
+                _ => {}
+            }
+        }
         let mut result = String::new();
         collect_text_inner(&inner, node_id, &mut result);
         result
@@ -481,18 +726,22 @@ impl DomTree {
         };
 
         if last_child_is_text {
+            // Re-read last_child without unwrap: if it vanished between the two
+            // borrows, fall through to appending a fresh text node rather than
+            // panicking (a panic here aborts the whole engine via V8_Fatal).
             let last_child_id = {
                 let inner = self.inner.borrow();
                 inner.nodes.get(parent_id.index())
                     .and_then(|n| n.as_ref())
                     .and_then(|n| n.last_child)
-                    .unwrap()
             };
-            let mut inner = self.inner.borrow_mut();
-            if let Some(Some(node)) = inner.nodes.get_mut(last_child_id.index()) {
-                if let NodeData::Text { contents } = &mut node.data {
-                    contents.push_str(text);
-                    return;
+            if let Some(last_child_id) = last_child_id {
+                let mut inner = self.inner.borrow_mut();
+                if let Some(Some(node)) = inner.nodes.get_mut(last_child_id.index()) {
+                    if let NodeData::Text { contents } = &mut node.data {
+                        contents.push_str(text);
+                        return;
+                    }
                 }
             }
         }
@@ -530,25 +779,72 @@ impl DomTree {
     }
 
     fn import_node_from(&self, parent_id: NodeId, source: &DomTree, source_node_id: NodeId) {
-        let node_data = {
-            let source_inner = source.inner.borrow();
-            match source_inner.nodes.get(source_node_id.index()) {
-                Some(Some(node)) => node.data.clone(),
-                _ => return,
+        // Iterative DFS with an explicit (dest_parent, source_node) stack so a
+        // deeply nested source tree cannot overflow the thread stack and abort
+        // the process. Children are pushed in reverse so they are appended in
+        // document order (append_child always appends to the end, so each level
+        // keeps the source ordering).
+        let mut stack = vec![(parent_id, source_node_id)];
+        while let Some((dest_parent, src_id)) = stack.pop() {
+            let node_data = {
+                let source_inner = source.inner.borrow();
+                match source_inner.nodes.get(src_id.index()) {
+                    Some(Some(node)) => node.data.clone(),
+                    _ => continue,
+                }
+            };
+
+            let new_id = self.new_node(node_data);
+            self.append_child(dest_parent, new_id);
+
+            // A <template>'s children hang off a separate contents document, so
+            // the child walk below never reaches them. Worse, the cloned data
+            // carries the *source* tree's contents NodeId, which here indexes
+            // whatever unrelated node occupies that slot. Allocate a real
+            // contents node and queue the source contents' children into it, so
+            // the reference is remapped rather than left dangling (issue #463).
+            let src_contents = {
+                let inner = self.inner.borrow();
+                match inner.nodes.get(new_id.index()).and_then(|n| n.as_ref()) {
+                    Some(node) => match &node.data {
+                        NodeData::Element { template_contents, .. } => *template_contents,
+                        _ => None,
+                    },
+                    None => None,
+                }
+            };
+            if let Some(src_contents) = src_contents {
+                let dest_contents = self.new_node(NodeData::Document);
+                {
+                    let mut inner = self.inner.borrow_mut();
+                    if let Some(Some(node)) = inner.nodes.get_mut(new_id.index()) {
+                        if let NodeData::Element { template_contents, .. } = &mut node.data {
+                            *template_contents = Some(dest_contents);
+                        }
+                    }
+                }
+                // Onto the same stack, so nested templates stay iterative.
+                for child_id in source.children(src_contents).into_iter().rev() {
+                    stack.push((dest_contents, child_id));
+                }
             }
-        };
 
-        let new_id = self.new_node(node_data);
-        self.append_child(parent_id, new_id);
-
-        let children = source.children(source_node_id);
-        for child_id in children {
-            self.import_node_from(new_id, source, child_id);
+            for child_id in source.children(src_id).into_iter().rev() {
+                stack.push((new_id, child_id));
+            }
         }
     }
 
     pub fn len(&self) -> usize {
         self.inner.borrow().nodes.iter().filter(|n| n.is_some()).count()
+    }
+
+    // Number of node slots (live plus freed), i.e. the same upper bound
+    // descendants() uses to cap a tree walk. A well-formed subtree has at most
+    // this many nodes, so it is a safe ceiling for iterative walkers that need a
+    // cycle backstop.
+    pub(crate) fn node_slot_count(&self) -> usize {
+        self.inner.borrow().nodes.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -567,16 +863,51 @@ impl DomTree {
 }
 
 fn collect_text_inner(inner: &DomTreeInner, node_id: NodeId, buf: &mut String) {
-    if let Some(Some(node)) = inner.nodes.get(node_id.index()) {
+    // Iterative pre-order walk on an explicit heap stack. The recursive form
+    // overflowed the thread stack and aborted the process on deeply nested
+    // trees; descendants() is iterative + capped for the same reason. A valid
+    // subtree visits at most nodes.len() nodes, so exceeding that means the
+    // graph is cyclic (prevented by the append_child / insert_before guards);
+    // stop rather than spin forever.
+    let max_steps = inner.nodes.len().saturating_add(16);
+    let mut steps = 0usize;
+    let mut stack = vec![node_id];
+
+    while let Some(id) = stack.pop() {
+        steps += 1;
+        if steps > max_steps {
+            eprintln!("obscura: collect_text_inner cap hit - tree has a cycle");
+            break;
+        }
+
+        let node = match inner.nodes.get(id.index()) {
+            Some(Some(n)) => n,
+            _ => continue,
+        };
+
         match &node.data {
             NodeData::Text { contents } => buf.push_str(contents),
+            // Comment and ProcessingInstruction are intentionally NOT
+            // appended when traversing descendants: per spec, textContent
+            // on an Element only includes Text descendants. Direct
+            // textContent on a Comment/PI is handled by the caller.
             _ => {
+                // Collect children, then push them in reverse so they pop in
+                // document order.
+                let mut kids = Vec::new();
                 let mut child = node.first_child;
                 while let Some(child_id) = child {
-                    collect_text_inner(inner, child_id, buf);
+                    kids.push(child_id);
+                    if kids.len() > inner.nodes.len() {
+                        eprintln!("obscura: collect_text_inner sibling cap hit - cycle");
+                        break;
+                    }
                     child = inner.nodes.get(child_id.index())
                         .and_then(|n| n.as_ref())
                         .and_then(|n| n.next_sibling);
+                }
+                for child_id in kids.into_iter().rev() {
+                    stack.push(child_id);
                 }
             }
         }
@@ -700,6 +1031,78 @@ mod tests {
     }
 
     #[test]
+    fn test_reparent_cycle_is_rejected() {
+        // document -> html -> body -> div. Moving an ancestor under one of its
+        // own descendants would make the parent/child graph cyclic and hang
+        // every later descendants() walk. Both append_child and insert_before
+        // must reject it as a no-op (DOM HierarchyRequestError).
+        let tree = DomTree::new();
+        let doc = tree.document();
+        let mk = |n: &str| {
+            tree.new_node(NodeData::Element {
+                name: QualName::new(None, ns!(html), LocalName::from(n)),
+                attrs: vec![],
+                template_contents: None,
+                mathml_annotation_xml_integration_point: false,
+            })
+        };
+        let html = mk("html");
+        let body = mk("body");
+        let div = mk("div");
+        tree.append_child(doc, html);
+        tree.append_child(html, body);
+        tree.append_child(body, div);
+
+        let before = tree.descendants(doc).len();
+        assert_eq!(before, 3);
+
+        // append_child: html is an ancestor of div -> must be a no-op, no cycle.
+        tree.append_child(div, html);
+        assert_eq!(tree.descendants(doc).len(), before, "cyclic append must be a no-op");
+        assert_eq!(tree.descendants(div).len(), 0, "div must stay a leaf");
+
+        // insert_before: html is an ancestor of body (div's parent) -> no-op.
+        tree.insert_before(div, html);
+        assert_eq!(tree.descendants(doc).len(), before, "cyclic insert_before must be a no-op");
+
+        // self-append / self-insert remain no-ops (existing guards).
+        tree.append_child(div, div);
+        tree.insert_before(div, div);
+        assert_eq!(tree.descendants(doc).len(), before);
+    }
+
+    #[test]
+    fn test_insert_before_previous_sibling_no_cycle() {
+        // Inserting a node before its own immediate previous sibling is a no-op
+        // reorder that frameworks do constantly. It used to splice
+        // next_sibling = self via a prev_id captured before detach, hanging every
+        // later sibling walk (this hung ebay.com). The result must stay a
+        // well-formed [a, b] with no cycle.
+        let tree = DomTree::new();
+        let doc = tree.document();
+        let mk = |n: &str| {
+            tree.new_node(NodeData::Element {
+                name: QualName::new(None, ns!(html), LocalName::from(n)),
+                attrs: vec![],
+                template_contents: None,
+                mathml_annotation_xml_integration_point: false,
+            })
+        };
+        let parent = mk("div");
+        let a = mk("a");
+        let b = mk("b");
+        tree.append_child(doc, parent);
+        tree.append_child(parent, a);
+        tree.append_child(parent, b); // parent -> [a, b]
+
+        // a is already b's previous sibling; this reorder must not create a cycle.
+        tree.insert_before(b, a);
+
+        let kids = tree.descendants(parent);
+        assert_eq!(kids, vec![a, b], "order preserved, no cycle");
+    }
+
+    #[test]
     fn test_append_text_merges() {
         let tree = DomTree::new();
         let doc = tree.document();
@@ -727,5 +1130,132 @@ mod tests {
         assert_eq!(tree.len(), 3);
         tree.remove(div);
         assert_eq!(tree.len(), 1);
+    }
+
+    #[test]
+    fn test_next_in_subtree_follows_document_order_and_stays_within_root() {
+        let tree = DomTree::new();
+        let root = tree.new_node(NodeData::Text { contents: "root".into() });
+        let first = tree.new_node(NodeData::Text { contents: "first".into() });
+        let nested = tree.new_node(NodeData::Text { contents: "nested".into() });
+        let second = tree.new_node(NodeData::Text { contents: "second".into() });
+        tree.append_child(tree.document(), root);
+        tree.append_child(root, first);
+        tree.append_child(first, nested);
+        tree.append_child(root, second);
+
+        assert_eq!(tree.next_in_subtree(root, root), Some(first));
+        assert_eq!(tree.next_in_subtree(root, first), Some(nested));
+        assert_eq!(tree.next_in_subtree(root, nested), Some(second));
+        assert_eq!(tree.next_in_subtree(root, second), None);
+    }
+
+    #[test]
+    fn test_next_after_subtree_skips_descendants() {
+        // Same shape as above: root > [first > nested, second]. Stepping past
+        // `first` must land on `second`, not descend into `nested` — that is
+        // what NodeFilter.FILTER_REJECT needs.
+        let tree = DomTree::new();
+        let root = tree.new_node(NodeData::Text { contents: "root".into() });
+        let first = tree.new_node(NodeData::Text { contents: "first".into() });
+        let nested = tree.new_node(NodeData::Text { contents: "nested".into() });
+        let second = tree.new_node(NodeData::Text { contents: "second".into() });
+        tree.append_child(tree.document(), root);
+        tree.append_child(root, first);
+        tree.append_child(first, nested);
+        tree.append_child(root, second);
+
+        assert_eq!(tree.next_after_subtree(root, first), Some(second));
+        // A leaf behaves identically to next_in_subtree: there is no subtree.
+        assert_eq!(tree.next_after_subtree(root, nested), Some(second));
+        assert_eq!(tree.next_after_subtree(root, second), None);
+        // Rejecting the root itself exhausts the walk rather than escaping it.
+        assert_eq!(tree.next_after_subtree(root, root), None);
+    }
+
+    #[test]
+    fn test_prev_in_subtree_reverses_document_order() {
+        // root > [first > nested, second]; document order is root, first,
+        // nested, second, so the reverse walk must retrace it exactly.
+        let tree = DomTree::new();
+        let root = tree.new_node(NodeData::Text { contents: "root".into() });
+        let first = tree.new_node(NodeData::Text { contents: "first".into() });
+        let nested = tree.new_node(NodeData::Text { contents: "nested".into() });
+        let second = tree.new_node(NodeData::Text { contents: "second".into() });
+        tree.append_child(tree.document(), root);
+        tree.append_child(root, first);
+        tree.append_child(first, nested);
+        tree.append_child(root, second);
+
+        // Previous sibling's deepest last descendant, not the sibling itself.
+        assert_eq!(tree.prev_in_subtree(root, second), Some(nested));
+        assert_eq!(tree.prev_in_subtree(root, nested), Some(first));
+        // No previous sibling: the parent precedes it, and root is returnable.
+        assert_eq!(tree.prev_in_subtree(root, first), Some(root));
+        // Root has no predecessor inside its own subtree.
+        assert_eq!(tree.prev_in_subtree(root, root), None);
+    }
+
+    // Builds a chain of `depth` nested <div> elements under the document and
+    // returns (outermost_div, innermost_div). Depth this large overflows a
+    // recursive tree walk and aborts the process, so it guards the iterative
+    // serialize / text_content / import paths against regressing to recursion.
+    fn build_deep_chain(tree: &DomTree, depth: usize) -> (NodeId, NodeId) {
+        let mk_div = || {
+            tree.new_node(NodeData::Element {
+                name: QualName::new(None, ns!(html), local_name!("div")),
+                attrs: vec![],
+                template_contents: None,
+                mathml_annotation_xml_integration_point: false,
+            })
+        };
+        let root = mk_div();
+        tree.append_child(tree.document(), root);
+        let mut cur = root;
+        for _ in 1..depth {
+            let next = mk_div();
+            tree.append_child(cur, next);
+            cur = next;
+        }
+        (root, cur)
+    }
+
+    #[test]
+    fn test_outer_html_deeply_nested_does_not_overflow() {
+        let tree = DomTree::new();
+        let (root, leaf) = build_deep_chain(&tree, 100_000);
+        let marker = tree.new_node(NodeData::Text {
+            contents: "leaf".into(),
+        });
+        tree.append_child(leaf, marker);
+
+        let html = tree.outer_html(root);
+        assert!(html.starts_with("<div>"));
+        assert!(html.contains("leaf"));
+        assert!(html.ends_with("</div>"));
+    }
+
+    #[test]
+    fn test_text_content_deeply_nested_does_not_overflow() {
+        let tree = DomTree::new();
+        let (root, leaf) = build_deep_chain(&tree, 100_000);
+        let marker = tree.new_node(NodeData::Text {
+            contents: "deep".into(),
+        });
+        tree.append_child(leaf, marker);
+
+        assert_eq!(tree.text_content(root), "deep");
+    }
+
+    #[test]
+    fn test_import_deeply_nested_does_not_overflow() {
+        let source = DomTree::new();
+        build_deep_chain(&source, 100_000);
+
+        let dest = DomTree::new();
+        let dest_doc = dest.document();
+        dest.import_children_from(dest_doc, &source, source.document());
+
+        assert!(dest.len() >= 100_000);
     }
 }

@@ -23,16 +23,20 @@ pub const STEALTH_USER_AGENT: &str =
 
 /// Chrome 148's `sec-ch-ua` brand list. Chrome 148 dropped the
 /// `"Google Chrome";v="…"` brand that earlier versions emitted and
-/// switched to a 2-brand GREASE format. wreq-util 3.0.0-rc.11's
-/// Chrome147 macro still emits the old 3-brand shape, so we override on
-/// every initial hop (and the non-stealth path mirrors this constant
-/// in `client.rs`).
-///
-/// Source: live Chrome 148.0.0.0 macOS HAR captured 2026-05-21 (see
-/// `tmp/2-www.bloomberg.com.har`, top-level GET on
-/// www.bloomberg.com).
+/// switched to a 2-brand GREASE format. Override on hop 0 so the wire
+/// identity matches live Chrome 148 (Bloomberg/PerimeterX + WSJ/DataDome).
 #[cfg(feature = "stealth")]
 pub const STEALTH_SEC_CH_UA: &str = "\"Not/A)Brand\";v=\"99\", \"Chromium\";v=\"148\"";
+
+// The wreq emulation platform must agree with navigator / sec-ch-ua-platform.
+// Private branch intentionally uses macOS: Linux Chrome is a rarer fingerprint
+// and gets scored harder by PerimeterX.
+#[cfg(feature = "stealth")]
+pub const STEALTH_NAVIGATOR_PLATFORM: &str = "MacIntel";
+#[cfg(feature = "stealth")]
+pub const STEALTH_UA_PLATFORM: &str = "macOS";
+#[cfg(feature = "stealth")]
+pub const STEALTH_UA_PLATFORM_VERSION: &str = "14.6.0";
 
 #[cfg(feature = "stealth")]
 pub struct StealthHttpClient {
@@ -49,64 +53,19 @@ impl StealthHttpClient {
     }
 
     pub fn with_proxy(cookie_jar: Arc<CookieJar>, proxy_url: Option<&str>) -> Self {
-        // Issue #184: `set_default_paths()` reads OpenSSL's compile-time CA
-        // paths, which only resolve on Linux. On Windows the store ends up
-        // empty and every TLS handshake fails with CERTIFICATE_VERIFY_FAILED.
-        // `CertStore::default()` uses wreq's bundled Mozilla roots
-        // (`webpki-root-certs`), which works the same on every platform.
-        let cert_store = wreq::tls::CertStore::default();
-
-        // Emulation profile:
-        //   * Chrome147 is the freshest variant wreq-util 3.0.0-rc.11 ships
-        //     (live Chrome stable is 148+ as of 2026-05). We keep the TLS+H2
-        //     fingerprint that wreq-util computes for Chrome147 and override
-        //     only the *version-identity* wire headers below to look like
-        //     Chrome 148: sec-ch-ua brand list (148 dropped "Google Chrome")
-        //     and the user-agent string. Everything else Chrome sends on a
-        //     top-level navigation (accept-encoding, accept-language, the
-        //     sec-fetch-* set, priority) now comes straight from the
-        //     emulation's own header table so it lands in Chrome's native
-        //     wire order. The only extra hop-0 additions are `accept`
-        //     (q=0.7 signed-exchange, matching live 148 exactly),
-        //     `upgrade-insecure-requests`, `priority`, and `sec-fetch-user`.
-        //   * accept-encoding: the `emulation-compression` feature on
-        //     wreq-util makes the Chrome147 profile advertise
-        //     `gzip, deflate, br, zstd` in its native slot (right after
-        //     `accept`). This is paired with wreq's gzip/brotli/deflate/zstd
-        //     decode features (see obscura-net/Cargo.toml) so the body is
-        //     still auto-decompressed. DataDome (WSJ) scores the *absence* of
-        //     accept-encoding as a bot signal, so we must advertise it. We do
-        //     NOT set it manually here — letting the emulation own it keeps
-        //     the wire order Chrome-correct.
-        //   * We deliberately do NOT send `cache-control: no-cache` /
-        //     `pragma: no-cache`. Earlier revs added them as an "incognito"
-        //     tell, but a live Chrome 148 top-level navigation (captured via
-        //     CDP off this same machine, 2026-06) sends neither, and their
-        //     presence is exactly the kind of header-set drift DataDome
-        //     fingerprints. A normal address-bar navigation has no
-        //     cache-control/pragma at all.
-        //   * MacOS is intentional: most desktop visitors hit
-        //     Bloomberg/PerimeterX from macOS or Windows. Linux Chrome is
-        //     a much rarer fingerprint and gets scored harder by PX.
-        //     Picking macOS keeps the UA, sec-ch-ua-platform, and
-        //     (downstream) `navigator.platform` consistent for the common
-        //     case.
-        //   * Note: wreq-util reuses the v132 TLS+H2 build for every
-        //     Chrome 132..=147 profile. That template is still modern
-        //     (X25519MLKEM768, permuted extensions, PSK) and its JA4
-        //     (t13d1514h2_8daaf6152771_9a55b862dad6) and HTTP/2 akamai
-        //     digest match a live Chrome 148 byte-for-byte as of 2026-06, so
-        //     the transport fingerprint is not the bottleneck — the request
-        //     header set is. If a future detector starts blocking the v132
-        //     ClientHello wholesale we'll need a fresher wreq-util release.
-        let emulation_opts = wreq_util::EmulationOption::builder()
-            .emulation(wreq_util::Emulation::Chrome147)
-            .emulation_os(wreq_util::EmulationOS::MacOS)
+        // Port of private gm/private stealth intent onto main's wreq-util API:
+        // freshest Chrome profile + macOS platform, then hop-0 header overrides
+        // in fetch() for Chrome 148 version identity (sec-ch-ua + UA).
+        // accept-encoding is left to the emulation (emulation-compression feature
+        // in Cargo.toml) so wire order stays Chrome-correct and bodies still
+        // decompress. Do NOT add cache-control/pragma (DataDome fingerprint).
+        let emulation_opts = wreq_util::Emulation::builder()
+            .profile(wreq_util::Profile::Chrome145)
+            .platform(wreq_util::Platform::MacOS)
             .build();
 
         let mut builder = wreq::Client::builder()
             .emulation(emulation_opts)
-            .cert_store(cert_store)
             .timeout(Duration::from_secs(30))
             .redirect(wreq::redirect::Policy::none());
 
@@ -128,49 +87,32 @@ impl StealthHttpClient {
 
     pub async fn fetch(&self, url: &Url) -> Result<Response, ObscuraNetError> {
         let mut current_url = url.clone();
+
+        if let Some(host) = current_url.host_str() {
+            if crate::blocklist::is_blocked(host) {
+                tracing::debug!("Blocked tracker: {}", current_url);
+                return Ok(Response {
+                    status: 0,
+                    url: current_url,
+                    headers: HashMap::new(),
+                    body: Vec::new(),
+                    redirected_from: Vec::new(),
+                });
+            }
+        }
+
         let mut redirects = Vec::new();
 
         for hop in 0..20 {
             let mut req = self.client.get(current_url.as_str());
 
-            // wreq-util's Chrome147 emulation already injects, in Chrome's
-            // native wire order: sec-ch-ua, sec-ch-ua-mobile,
-            // sec-ch-ua-platform, user-agent, the sec-fetch-* set, accept,
-            // accept-encoding (via the `emulation-compression` feature —
-            // gzip,deflate,br,zstd), accept-language, and priority. We only
-            // override the two *version-identity* values it gets wrong for
-            // 148, then add the handful of nav-only headers the emulation
-            // doesn't carry. Everything we set with `.header()` that already
-            // exists in the emulation table replaces the value in place
-            // (wreq re-sorts to the emulation's OrigHeaderMap order before
-            // sending), so the wire order stays Chrome-correct.
-            //
-            //   sec-ch-ua:  "Not/A)Brand";v="99", "Chromium";v="148"
-            //               (emulation ships the 3-brand v147 shape; 148
-            //                dropped the "Google Chrome" brand)
-            //   user-agent: …Chrome/148.0.0.0…   (emulation: 147)
-            //
-            // hop-0-only additions (a fresh top-level navigation):
-            //   accept:                    …signed-exchange;v=b3;q=0.7
-            //                              (live 148 uses q=0.7, not q=0.9)
-            //   upgrade-insecure-requests: 1
-            //   priority:                  u=0, i
-            //   sec-fetch-user:            ?1
-            //
-            // We do NOT touch accept-encoding (owned by the emulation, kept
-            // in lockstep with wreq's decode features) and we deliberately
-            // send NO cache-control/pragma — a real Chrome 148 address-bar
-            // navigation (CDP capture off this machine, 2026-06) sends
-            // neither, and DataDome scores that header-set drift.
-            //
-            // On redirect follow-ups Chrome flips sec-fetch-site away from
-            // `none` and drops sec-fetch-user; we can't infer the exact
-            // site relationship without extra plumbing, so we only re-assert
-            // the version identity on later hops and let the emulation's
-            // fetch metadata stand.
+            // Version-identity overrides (private Chrome 148 work). Emulation
+            // still owns accept-encoding / sec-fetch-* base set. Hop 0 adds
+            // nav-only headers real Chrome sends on a top-level navigation.
             req = req
                 .header("sec-ch-ua", STEALTH_SEC_CH_UA)
                 .header("user-agent", STEALTH_USER_AGENT)
+                .header("sec-ch-ua-platform", "\"macOS\"")
                 .header("upgrade-insecure-requests", "1");
             if hop == 0 {
                 req = req
@@ -242,6 +184,85 @@ impl StealthHttpClient {
         }
 
         Err(ObscuraNetError::TooManyRedirects(url.to_string()))
+    }
+
+    /// One request with no redirect following, for scripted fetch()/XHR. Reads
+    /// the cookie jar for the Cookie header and stores Set-Cookie back into it,
+    /// so the caller only owns redirect hops and SSRF re-validation. Used in
+    /// stealth mode so JS-level requests carry the same Chrome TLS fingerprint
+    /// and client hints as the main navigation instead of the rustls ClientHello
+    /// that op_fetch_url would otherwise send (which bot managers read as a
+    /// non-browser script and reject, e.g. the AWS WAF challenge verify call).
+    pub async fn send_single(
+        &self,
+        method: &str,
+        url: &Url,
+        headers: &HashMap<String, String>,
+        body: &str,
+    ) -> Result<Response, ObscuraNetError> {
+        if let Some(host) = url.host_str() {
+            if crate::blocklist::is_blocked(host) {
+                tracing::debug!("Blocked tracker: {}", url);
+                return Ok(Response {
+                    status: 0,
+                    url: url.clone(),
+                    headers: HashMap::new(),
+                    body: Vec::new(),
+                    redirected_from: Vec::new(),
+                });
+            }
+        }
+
+        let req_method = method
+            .parse::<wreq::Method>()
+            .map_err(|e| ObscuraNetError::Network(format!("invalid method '{}': {}", method, e)))?;
+        let mut req = self.client.request(req_method, url.as_str());
+
+        let cookie_header = self.cookie_jar.get_cookie_header(url);
+        if !cookie_header.is_empty() {
+            req = req.header("cookie", &cookie_header);
+        }
+        for (k, v) in self.extra_headers.read().await.iter() {
+            req = req.header(k.as_str(), v.as_str());
+        }
+        for (k, v) in headers.iter() {
+            req = req.header(k.as_str(), v.as_str());
+        }
+        if !body.is_empty() {
+            req = req.body(body.to_string());
+        }
+
+        self.in_flight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let resp = req.send().await.map_err(|e| {
+            self.in_flight.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            ObscuraNetError::Network(format!("{}: {}", url, e))
+        })?;
+        self.in_flight.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+
+        let status = resp.status();
+        for val in resp.headers().get_all("set-cookie") {
+            if let Ok(s) = val.to_str() {
+                self.cookie_jar.set_cookie(s, url);
+            }
+        }
+        let response_headers: HashMap<String, String> = resp
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.as_str().to_lowercase(), v.to_str().unwrap_or("").to_string()))
+            .collect();
+        let resp_body = resp
+            .bytes()
+            .await
+            .map_err(|e| ObscuraNetError::Network(format!("Failed to read body: {}", e)))?
+            .to_vec();
+
+        Ok(Response {
+            url: url.clone(),
+            status: status.as_u16(),
+            headers: response_headers,
+            body: resp_body,
+            redirected_from: Vec::new(),
+        })
     }
 
     pub async fn set_extra_headers(&self, headers: HashMap<String, String>) {

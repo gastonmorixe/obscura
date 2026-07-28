@@ -79,11 +79,11 @@ pub async fn handle(
             ctx.fetch_intercept.patterns = patterns.clone();
             let tx_clone = ctx.intercept_tx.clone();
             if let Some(page) = ctx.get_session_page_mut(session_id) {
-                page.intercept_enabled = true;
                 page.intercept_block_patterns = patterns.clone();
                 if let Some(tx) = tx_clone {
                     page.set_intercept_tx(tx);
                 }
+                page.enable_intercept(true);
             }
 
             tracing::info!("Fetch interception enabled");
@@ -93,8 +93,8 @@ pub async fn handle(
             ctx.fetch_intercept.enabled = false;
             ctx.fetch_intercept.patterns.clear();
             if let Some(page) = ctx.get_session_page_mut(session_id) {
-                page.intercept_enabled = false;
                 page.intercept_block_patterns.clear();
+                page.enable_intercept(false);
             }
             let paused: Vec<_> = ctx.fetch_intercept.paused.drain().collect();
             for (_, req) in paused {
@@ -180,6 +180,34 @@ pub async fn handle(
         }
         "getResponseBody" => {
             Ok(json!({ "body": "", "base64Encoded": false }))
+        }
+        "takeResponseBodyAsStream" => {
+            // Hand the client a streaming handle for a large response body so it
+            // can pull it in chunks via IO.read and free it with IO.close,
+            // instead of receiving one giant base64 blob (issue #360). The body
+            // is moved out of the page cache into the stream, so it is held once
+            // and released on close. Requires the body to have been cached
+            // (raise OBSCURA_NETWORK_BODY_BUFFER_BYTES for large downloads).
+            let request_id = params
+                .get("requestId")
+                .and_then(|v| v.as_str())
+                .ok_or("Fetch.takeResponseBodyAsStream requires requestId")?;
+
+            let bytes = {
+                let page = ctx.get_session_page_mut(session_id).ok_or("No page")?;
+                page.take_response_body_raw(request_id)
+            }
+            .or_else(|| {
+                ctx.pages
+                    .iter_mut()
+                    .find_map(|p| p.take_response_body_raw(request_id))
+            })
+            .ok_or_else(|| {
+                format!("Fetch.takeResponseBodyAsStream: no cached body for {request_id}")
+            })?;
+
+            let handle = ctx.io_streams.insert(bytes);
+            Ok(json!({ "stream": handle }))
         }
         _ => Err(format!("Unknown Fetch method: {}", method)),
     }

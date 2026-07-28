@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use clap::{Parser, Subcommand};
 use obscura_browser::{BrowserContext, Page};
+use obscura_ext;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command as TokioCommand;
 use tokio::time::{timeout, Duration};
@@ -10,7 +11,7 @@ use tokio::time::{timeout, Duration};
 #[derive(Parser)]
 #[command(
     name = "obscura",
-    version = env!("CARGO_PKG_VERSION"),
+    version = env!("OBSCURA_BUILD_VERSION"),
     about = "Obscura - A lightweight headless browser for web scraping and automation",
 )]
 struct Args {
@@ -26,27 +27,28 @@ struct Args {
     #[arg(long, global = true)]
     proxy: Option<String>,
 
+    /// Enable stealth mode (consistent browser fingerprint, and with the
+    /// `stealth` build feature, TLS impersonation plus tracker blocking).
+    /// Global: applies to fetch, serve, scrape, and mcp.
+    #[arg(long, global = true)]
+    stealth: bool,
+
     #[arg(long)]
     obey_robots: bool,
 
     #[arg(long)]
     user_agent: Option<String>,
 
-    /// Persist the browser session (cookies + `localStorage`) to this
-    /// directory. The `mcp` subcommand falls back to this when its own
-    /// `--storage-dir` is omitted; `fetch` and `serve` require the
-    /// subcommand-level flag explicitly. On graceful shutdown the jar
-    /// is written atomically as `cookies.json` + `localstorage.json`
-    /// under this directory. See `docs/persistence.md` for the on-disk
-    /// shape and threat model.
     #[arg(long)]
     storage_dir: Option<std::path::PathBuf>,
 
-    /// Pass raw flags to V8, in the same form V8/Chromium/Node accept
-    /// (e.g. `"--max-old-space-size=4096 --max-semi-space-size=64 --expose-gc"`).
-    /// Applied once at startup before any isolate is created.
-    #[arg(long, value_name = "FLAGS", allow_hyphen_values = true)]
-    v8_flags: Option<String>,
+    /// Permit fetches to loopback, RFC1918, and link-local addresses.
+    /// Default is to block them (SSRF fix from #4). Use this for local
+    /// development against http://localhost:N or http://192.168.x.y.
+    /// Equivalent to `OBSCURA_ALLOW_PRIVATE_NETWORK=1` but per-process
+    /// and survives in command pipelines.
+    #[arg(long, global = true)]
+    allow_private_network: bool,
 
     /// Load a WebExtension bundle and attach it to every BrowserContext.
     /// Accepts an unpacked directory, a `.zip` / `.xpi` archive, or a
@@ -58,6 +60,12 @@ struct Args {
     /// (multi-extension support is on the roadmap).
     #[arg(long, value_name = "PATH", global = true)]
     extension: Vec<std::path::PathBuf>,
+
+    /// Pass raw flags to V8, in the same form V8/Chromium/Node accept
+    /// (e.g. `"--max-old-space-size=4096 --max-semi-space-size=64 --expose-gc"`).
+    /// Applied once at startup before any isolate is created.
+    #[arg(long, value_name = "FLAGS", allow_hyphen_values = true)]
+    v8_flags: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -79,11 +87,15 @@ enum Command {
         #[arg(long)]
         user_agent: Option<String>,
 
-        #[arg(long)]
-        stealth: bool,
-
         #[arg(long, default_value_t = 1)]
         workers: u16,
+
+        /// Maximum live CDP connections. Each connection runs on its own OS
+        /// thread with its own V8 isolates, so this bounds the server's thread
+        /// and memory footprint. Connections beyond the limit are refused with
+        /// a 503 rather than queued.
+        #[arg(long, default_value_t = obscura_cdp::DEFAULT_MAX_CONNECTIONS)]
+        max_connections: usize,
 
         /// Allow CDP clients to navigate to file:// URLs. Off by
         /// default so a CDP connection cannot read arbitrary local
@@ -92,21 +104,39 @@ enum Command {
         #[arg(long)]
         allow_file_access: bool,
 
-        /// Persist the CDP browser session (cookies + `localStorage`)
-        /// to this directory. Loaded on context creation, saved on
-        /// Ctrl-C / channel close. Files: `cookies.json` and
-        /// `localstorage.json`. See `docs/persistence.md` for layout
-        /// and `obscura fetch --storage-dir` for an end-to-end
-        /// example.
         #[arg(long)]
         storage_dir: Option<std::path::PathBuf>,
+
+        /// Suppress all logs (same as on `fetch`). Useful when scraping pages
+        /// that flood the console with per-page script warnings (issue #264).
+        #[arg(long)]
+        quiet: bool,
     },
 
     Fetch {
-        url: String,
+        // Optional so a batch run can pass URLs via --file instead. A single
+        // positional URL keeps the original one-shot behaviour.
+        url: Option<String>,
 
-        #[arg(long, default_value = "html")]
-        dump: DumpFormat,
+        // Default is html. Kept as Option so we can tell whether --dump was
+        // explicitly passed: a bare --eval returns its own value, while --eval
+        // combined with --dump (or --selector) runs the eval, lets its async
+        // work settle, then reads the page (issue #248).
+        #[arg(long)]
+        dump: Option<DumpFormat>,
+
+        /// Read newline-delimited URLs from a file (one per line; blank lines
+        /// and lines starting with `#` are skipped). Use `-` for stdin. Enables
+        /// batch mode: every URL is fetched raw (--dump original) and one JSON
+        /// status line is printed per URL. For rendered/DOM batch output use
+        /// `scrape` instead (issue #349).
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
+
+        /// Number of URLs fetched concurrently in batch mode. Ignored without
+        /// --file.
+        #[arg(long, default_value_t = std::num::NonZeroUsize::new(1).unwrap())]
+        concurrency: std::num::NonZeroUsize,
 
         #[arg(long)]
         selector: Option<String>,
@@ -123,9 +153,6 @@ enum Command {
         #[arg(long)]
         user_agent: Option<String>,
 
-        #[arg(long)]
-        stealth: bool,
-
         #[arg(long, short)]
         eval: Option<String>,
 
@@ -135,12 +162,6 @@ enum Command {
         #[arg(long, short)]
         quiet: bool,
 
-        /// Persist the browser session (cookies + `localStorage`) to
-        /// this directory. Loaded on startup, saved at exit. Files:
-        /// `cookies.json` and `localstorage.json`. Pass the same dir
-        /// across multiple `obscura fetch` invocations to stay logged
-        /// in across runs. See `docs/persistence.md` for the threat
-        /// model (plaintext on disk, no cross-process locking).
         #[arg(long)]
         storage_dir: Option<std::path::PathBuf>,
     },
@@ -168,6 +189,9 @@ enum Command {
         #[arg(long)]
         http: bool,
 
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+
         #[arg(long, default_value_t = 3000)]
         port: u16,
 
@@ -177,14 +201,6 @@ enum Command {
         #[arg(long)]
         user_agent: Option<String>,
 
-        #[arg(long)]
-        stealth: bool,
-
-        /// Persist the browser session (cookies + localStorage) to this
-        /// directory. Re-runs of `obscura mcp --storage-dir <dir>` see the
-        /// same cookies and localStorage as the previous run, enabling
-        /// stay-logged-in workflows. See `obscura fetch --storage-dir` for
-        /// the on-disk shape (`cookies.json` + `localstorage.json`).
         #[arg(long)]
         storage_dir: Option<std::path::PathBuf>,
     },
@@ -208,6 +224,10 @@ enum DumpFormat {
     /// replay the asset graph with their own HTTP client when they
     /// need the originals alongside the page (cf. issue 124).
     Assets,
+    /// Dump all cookies in the browser jar as a JSON array, including
+    /// HttpOnly cookies that are inaccessible via document.cookie.
+    /// Useful for extracting session tokens set by anti-bot challenges.
+    Cookies,
 }
 
 fn print_banner(port: u16) {
@@ -219,9 +239,9 @@ fn print_banner(port: u16) {
  | |__| | |_) \__ \ (__| |_| | | | (_| |
   \____/|_.__/|___/\___|\__,_|_|  \__,_|
                    
-  Headless Browser v0.1.5
+  Headless Browser v{}
   CDP server: ws://127.0.0.1:{}/devtools/browser
-"#, port);
+"#, env!("OBSCURA_BUILD_VERSION"), port);
 }
 
 fn select_log_filter(verbose: bool, quiet: bool) -> &'static str {
@@ -237,56 +257,14 @@ fn select_log_filter(verbose: bool, quiet: bool) -> &'static str {
 fn is_quiet_command(cmd: &Option<Command>) -> bool {
     matches!(
         cmd,
-        Some(Command::Fetch { quiet: true, .. }) | Some(Command::Scrape { quiet: true, .. })
+        Some(Command::Fetch { quiet: true, .. })
+            | Some(Command::Scrape { quiet: true, .. })
+            | Some(Command::Serve { quiet: true, .. })
     )
 }
 
 fn merge_proxy(global_proxy: Option<String>, command_proxy: Option<String>) -> Option<String> {
     command_proxy.or(global_proxy)
-}
-
-/// `--stealth` routes outbound traffic through `wreq`, which doesn't speak
-/// SOCKS5. A previous workaround silently rewrote `socks5://` to `http://`,
-/// which broke plain SOCKS5 servers (#160). Refuse the combination at
-/// startup so the user gets a clear message instead of `TunnelUnexpectedEof`.
-fn reject_stealth_with_socks5(proxy: Option<&str>, stealth: bool) -> anyhow::Result<()> {
-    if !stealth {
-        return Ok(());
-    }
-    let Some(p) = proxy else { return Ok(()) };
-    let scheme = p.split("://").next().unwrap_or("").to_ascii_lowercase();
-    if scheme == "socks5" || scheme == "socks5h" {
-        anyhow::bail!(
-            "--stealth does not support SOCKS5 proxies (the stealth HTTP \
-             client cannot reach the upstream). Use --proxy http://... \
-             or drop --stealth."
-        );
-    }
-    Ok(())
-}
-
-/// Resolve `--extension <PATH>...` into the single live ExtensionRuntime
-/// we'll attach to every BrowserContext built this run. Returns `Ok(None)`
-/// when no extensions were passed. Multi-extension support is a TODO; for
-/// now we honour the first and warn on extras so users notice the silent
-/// drop.
-fn load_extension_runtime(
-    paths: &[std::path::PathBuf],
-) -> anyhow::Result<Option<Arc<obscura_ext::ExtensionRuntime>>> {
-    if paths.is_empty() {
-        return Ok(None);
-    }
-    if paths.len() > 1 {
-        tracing::warn!(
-            "obscura-ext: multiple --extension flags given; only the first ({}) is loaded",
-            paths[0].display()
-        );
-    }
-    let bundle = obscura_ext::Bundle::load(&paths[0]).map_err(|e| {
-        anyhow::anyhow!("failed to load extension at {}: {e}", paths[0].display())
-    })?;
-    let runtime = obscura_ext::ExtensionRuntime::new(Arc::new(bundle));
-    Ok(Some(Arc::new(runtime)))
 }
 
 /// Normalize a raw `--v8-flags` value into the string we'll hand to V8.
@@ -301,9 +279,66 @@ fn normalize_v8_flags(raw: Option<&str>) -> Option<String> {
     }
 }
 
+/// Default V8 flags applied at startup unless the user disabled them via
+/// `--v8-flags`. The default heap matches headless Chrome (~4 GB) so pages
+/// that ship heavy fingerprinting or analytics bundles
+/// (e.g. demo.fingerprint.com — issue #199) don't SIGTRAP out of the box.
+/// V8 parses flags left-to-right and later wins, so anything the user
+/// passes via `--v8-flags` overrides these.
+///
+/// `--max-semi-space-size=4` caps V8's young generation (default 16 MB per
+/// semi-space) so a parse/JS allocation burst does not inflate RSS, and
+/// `--optimize-for-size` trades memory-heavy codegen choices for a smaller
+/// footprint. Together they cut RSS ~18% on heavy pages (ycombinator.com
+/// 173 MB -> 140 MB) at no measurable speed cost (V8 still JITs hot paths).
+#[cfg(target_pointer_width = "64")]
+const DEFAULT_V8_FLAGS: &str = "--max-old-space-size=4096 --max-semi-space-size=4 --optimize-for-size";
+#[cfg(not(target_pointer_width = "64"))]
+const DEFAULT_V8_FLAGS: &str = "--max-old-space-size=1024 --max-semi-space-size=4 --optimize-for-size";
+
+fn effective_v8_flags(user: Option<&str>) -> String {
+    match normalize_v8_flags(user) {
+        Some(u) => format!("{} {}", DEFAULT_V8_FLAGS, u),
+        None => DEFAULT_V8_FLAGS.to_string(),
+    }
+}
+
+fn load_extension_runtime(
+    paths: &[std::path::PathBuf],
+) -> anyhow::Result<Option<std::sync::Arc<obscura_ext::ExtensionRuntime>>> {
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    if paths.len() > 1 {
+        tracing::warn!(
+            "obscura-ext: multiple --extension flags given; only the first ({}) is loaded",
+            paths[0].display()
+        );
+    }
+    let bundle = obscura_ext::Bundle::load(&paths[0]).map_err(|e| {
+        anyhow::anyhow!("failed to load extension at {}: {e}", paths[0].display())
+    })?;
+    let runtime = obscura_ext::ExtensionRuntime::new(std::sync::Arc::new(bundle));
+    Ok(Some(std::sync::Arc::new(runtime)))
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+
+    // Pin the process timezone before V8/ICU reads it. V8 sources the zone for
+    // both Date (getTimezoneOffset, toString) and Intl.DateTimeFormat from TZ; left
+    // unset it defaults to UTC for Date while the page layer advertised a different
+    // zone, a cross-surface mismatch fingerprinting scripts flag. Default to
+    // Europe/Berlin; set OBSCURA_TIMEZONE to match the exit IP's region. An existing
+    // TZ from the host is respected.
+    // SAFETY: runs before any V8 isolate or worker thread starts, so the env is
+    // effectively single threaded here.
+    if let Some(tz) = std::env::var("OBSCURA_TIMEZONE").ok().filter(|s| !s.trim().is_empty()) {
+        unsafe { std::env::set_var("TZ", tz); }
+    } else if std::env::var_os("TZ").is_none() {
+        unsafe { std::env::set_var("TZ", "Europe/Berlin"); }
+    }
 
     let quiet = is_quiet_command(&args.command);
     let filter = select_log_filter(args.verbose, quiet);
@@ -315,36 +350,34 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    if let Some(flags) = normalize_v8_flags(args.v8_flags.as_deref()) {
-        tracing::info!("Applying V8 flags: {}", flags);
-        obscura_js::set_v8_flags(&flags);
+    let v8_flags = effective_v8_flags(args.v8_flags.as_deref());
+    tracing::debug!("V8 flags: {}", v8_flags);
+    obscura_js::set_v8_flags(&v8_flags);
+
+    // The js-side fetch path (op_fetch_url) reads OBSCURA_ALLOW_PRIVATE_NETWORK
+    // directly for its SSRF gate. Mirror the CLI flag into the env var so
+    // iframe loads and JS fetch() see the same policy the http_client layer
+    // already uses (issue #33).
+    if args.allow_private_network {
+        // SAFETY: set_var is unsafe in newer rustc; this runs before any
+        // spawned thread inspects the env, so it's effectively single
+        // threaded at this point.
+        unsafe { std::env::set_var("OBSCURA_ALLOW_PRIVATE_NETWORK", "1"); }
     }
 
     let global_proxy = args.proxy.clone();
+    let stealth = args.stealth;
 
-    // Load extension bundles up front, before any BrowserContext is built,
-    // so a bad --extension path errors with a clear message rather than
-    // surfacing as a mid-navigation warning. Currently we only honour the
-    // first; multi-extension support requires per-extension state isolation
-    // which is on the roadmap.
-    let extension_runtime: Option<Arc<obscura_ext::ExtensionRuntime>> =
+    let extension_runtime: Option<std::sync::Arc<obscura_ext::ExtensionRuntime>> =
         load_extension_runtime(&args.extension)?;
-    if let Some(ref ext) = extension_runtime {
-        if !quiet {
-            eprintln!(
-                "Loaded extension: {} v{} (manifest v{}, {} host patterns)",
-                ext.bundle.manifest.name,
-                ext.bundle.manifest.version,
-                ext.bundle.manifest.manifest_version,
-                ext.bundle.manifest.host_patterns.len()
-            );
-        }
-    }
 
     match args.command {
-        Some(Command::Serve { port, host, proxy, user_agent, stealth, workers, allow_file_access, storage_dir }) => {
-            let proxy = merge_proxy(global_proxy.clone(), proxy);
-            reject_stealth_with_socks5(proxy.as_deref(), stealth)?;
+        Some(Command::Serve { port, host, proxy, user_agent, workers, max_connections, allow_file_access, storage_dir, quiet: _ }) => {
+            // Fall back to OBSCURA_PROXY so a proxy can be supplied without
+            // putting credentials on the command line. The multi-worker load
+            // balancer passes the proxy to each worker this way (issue #366).
+            let proxy = merge_proxy(global_proxy.clone(), proxy)
+                .or_else(|| std::env::var("OBSCURA_PROXY").ok().filter(|s| !s.is_empty()));
             print_banner(port);
             if let Some(ref dir) = storage_dir {
                 tracing::info!("Storage dir: {}", dir.display());
@@ -366,46 +399,45 @@ async fn main() -> anyhow::Result<()> {
 
             if workers > 1 {
                 tracing::info!("{} worker processes", workers);
-                run_multi_worker_serve(port, workers, proxy, stealth, user_agent).await?;
+                run_multi_worker_serve(port, host, workers, proxy, stealth, user_agent).await?;
             } else {
-                obscura_cdp::start_with_host_and_security(
+                obscura_cdp::start_with_serve_options_and_limit(
                     port, &host, proxy, stealth, user_agent, allow_file_access, storage_dir,
+                    args.allow_private_network, max_connections,
                 ).await?;
             }
         }
-        Some(Command::Fetch { url, dump, selector, wait, timeout, wait_until, user_agent, stealth, eval, output, quiet, storage_dir }) => {
-            reject_stealth_with_socks5(global_proxy.as_deref(), stealth)?;
-            run_fetch(&url, dump, selector, wait, timeout, &wait_until, user_agent, stealth, eval, output, quiet, global_proxy, storage_dir, extension_runtime.clone()).await?;
+        Some(Command::Fetch { url, dump, selector, wait, timeout, wait_until, user_agent, eval, output, quiet, storage_dir, file, concurrency }) => {
+            if let Some(file) = file {
+                if url.is_some() {
+                    anyhow::bail!("Pass URLs via a positional argument or --file, not both.");
+                }
+                // Batch mode is raw HTTP only. Rendering each URL through the
+                // browser/JS stack is what `scrape` is for.
+                match dump {
+                    None | Some(DumpFormat::Original) => {}
+                    Some(_) => anyhow::bail!(
+                        "batch mode (--file) only supports --dump original. Use `scrape` for rendered/DOM output."
+                    ),
+                }
+                let urls = read_urls_from_file(&file)?;
+                run_batch_fetch(urls, concurrency.get(), timeout, user_agent, global_proxy, output, quiet).await?;
+            } else {
+                let url = url.ok_or_else(|| {
+                    anyhow::anyhow!("No URL provided. Pass a URL, or a list of URLs with --file <path>.")
+                })?;
+                run_fetch(&url, dump, selector, wait, timeout, &wait_until, user_agent, stealth, eval, output, quiet, global_proxy, storage_dir, args.allow_private_network, extension_runtime.clone()).await?;
+            }
         }
         Some(Command::Scrape { urls, eval, concurrency, format, timeout, quiet }) => {
-            run_parallel_scrape(urls, eval, concurrency.get(), &format, timeout, quiet, global_proxy).await?;
+            run_parallel_scrape(urls, eval, concurrency.get(), &format, timeout, quiet, global_proxy, stealth).await?;
         }
-        Some(Command::Mcp { http, port, proxy, user_agent, stealth, storage_dir }) => {
+        Some(Command::Mcp { http, host, port, proxy, user_agent, storage_dir }) => {
             let mcp_proxy = merge_proxy(global_proxy.clone(), proxy.clone());
-            reject_stealth_with_socks5(mcp_proxy.as_deref(), stealth)?;
-            // Fall back to the global --storage-dir if the subcommand didn't
-            // override it, matching how --proxy works above.
-            let effective_storage_dir = storage_dir.or_else(|| args.storage_dir.clone());
-            if let Some(ref dir) = effective_storage_dir {
-                tracing::info!("Using storage dir for MCP session: {}", dir.display());
-            }
             if http {
-                obscura_mcp::http::run_with_storage(
-                    port,
-                    proxy,
-                    user_agent,
-                    stealth,
-                    effective_storage_dir,
-                )
-                .await?;
+                obscura_mcp::http::run_with_storage(host.clone(), port, mcp_proxy, user_agent.clone(), stealth, storage_dir.clone()).await?;
             } else {
-                obscura_mcp::run_with_storage(
-                    proxy,
-                    user_agent,
-                    stealth,
-                    effective_storage_dir,
-                )
-                .await?;
+                obscura_mcp::run_with_storage(mcp_proxy, user_agent.clone(), stealth, storage_dir.clone()).await?;
             }
         }
         None => {
@@ -413,7 +445,7 @@ async fn main() -> anyhow::Result<()> {
             if let Some(ref proxy) = args.proxy {
                 tracing::info!("Using proxy: {}", proxy);
             }
-            obscura_cdp::start_with_options(args.port, args.proxy, false).await?;
+            obscura_cdp::start_with_options(args.port, args.proxy, stealth).await?;
         }
     }
 
@@ -422,6 +454,7 @@ async fn main() -> anyhow::Result<()> {
 
 async fn run_multi_worker_serve(
     port: u16,
+    host: String,
     workers: u16,
     proxy: Option<String>,
     stealth: bool,
@@ -438,7 +471,11 @@ async fn run_multi_worker_serve(
         let mut cmd = std::process::Command::new(&exe);
         cmd.arg("serve").arg("--port").arg(worker_port.to_string());
         if let Some(ref p) = proxy {
-            cmd.arg("--proxy").arg(p);
+            // Pass the proxy (which may embed credentials) via the environment,
+            // not argv. A --proxy flag is visible in `ps`/`/proc/<pid>/cmdline`
+            // to any local user; OBSCURA_PROXY is only readable by the owner
+            // (issue #366). The worker's serve path reads this env as a fallback.
+            cmd.env("OBSCURA_PROXY", p);
         }
         if let Some(ref ua) = user_agent {
             cmd.arg("--user-agent").arg(ua);
@@ -456,9 +493,13 @@ async fn run_multi_worker_serve(
 
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    let listener = TcpListener::bind(&addr).await?;
-    tracing::info!("Load balancer on port {}, {} workers", port, workers);
+    // Bind the load balancer to the requested host, not hardcoded loopback.
+    // With --host 0.0.0.0 (e.g. in Docker) the single-worker path already binds
+    // all interfaces; the multi-worker balancer must too, or the mapped port is
+    // refused from outside the container (issue #336). Workers stay on loopback
+    // and are only reached by the balancer.
+    let listener = TcpListener::bind((host.as_str(), port)).await?;
+    tracing::info!("Load balancer on {}:{}, {} workers", host, port, workers);
 
     let mut next_worker: u16 = 0;
 
@@ -549,7 +590,7 @@ async fn run_multi_worker_serve(
 
 async fn run_fetch(
     url_str: &str,
-    dump: DumpFormat,
+    dump: Option<DumpFormat>,
     selector: Option<String>,
     wait_secs: u64,
     timeout_secs: u64,
@@ -561,8 +602,15 @@ async fn run_fetch(
     quiet: bool,
     proxy: Option<String>,
     storage_dir: Option<std::path::PathBuf>,
-    extension: Option<Arc<obscura_ext::ExtensionRuntime>>,
+    allow_private_network: bool,
+    extension: Option<std::sync::Arc<obscura_ext::ExtensionRuntime>>,
 ) -> anyhow::Result<()> {
+    // Whether the user explicitly passed --dump. With --eval also present this
+    // decides whether we return the eval value or read the page after the
+    // eval's async work settles (issue #248).
+    let dump_specified = dump.is_some();
+    let dump = dump.unwrap_or(DumpFormat::Html);
+
     // --dump original short-circuits the browser stack entirely: fetch the raw
     // response body via HTTP and stream the bytes verbatim. Useful for binary
     // payloads (images, fonts, …) and any non-HTML resource where parsing the
@@ -579,19 +627,18 @@ async fn run_fetch(
         return Ok(());
     }
 
-    let context = {
-        let mut ctx = BrowserContext::with_storage_full(
-            "fetch".to_string(),
-            proxy,
-            stealth,
-            user_agent.clone(),
-            storage_dir.clone(),
-        );
-        if let Some(ext) = extension {
-            ctx = ctx.with_extension(ext);
-        }
-        Arc::new(ctx)
-    };
+    let mut context = BrowserContext::with_storage_and_network(
+        "fetch".to_string(),
+        proxy,
+        stealth,
+        user_agent.clone(),
+        storage_dir.clone(),
+        allow_private_network,
+    );
+    if let Some(ext) = extension {
+        context = context.with_extension(ext);
+    }
+    let context = Arc::new(context);
     let mut page = Page::new("fetch-page".to_string(), context.clone());
 
     if let Some(ref ua) = user_agent {
@@ -602,6 +649,22 @@ async fn run_fetch(
 
     if !quiet {
         eprintln!("Fetching {}...", url_str);
+    }
+
+    // Process-level hard deadline. A synchronous hang inside a Rust op invoked
+    // from page JS cannot be cancelled by tokio (there is no await to interrupt)
+    // nor by the V8 watchdog (terminate_execution only unwinds JS bytecode, not
+    // native Rust running beneath a V8->op call). As an absolute backstop so one
+    // fetch can never wedge the worker, a daemon thread force-exits if the whole
+    // operation overruns timeout + wait + grace. A normal fetch returns first and
+    // the process exits before this fires.
+    {
+        let hard = Duration::from_secs(timeout_secs.saturating_add(wait_secs).saturating_add(10));
+        std::thread::spawn(move || {
+            std::thread::sleep(hard);
+            eprintln!("obscura: hard timeout exceeded ({}s); forcing exit", hard.as_secs());
+            std::process::exit(124);
+        });
     }
 
     match timeout(Duration::from_secs(timeout_secs), page.navigate_with_wait(url_str, wait_condition)).await {
@@ -617,39 +680,44 @@ async fn run_fetch(
         eprintln!("Page loaded: {} - \"{}\"", page.url_string(), page.title);
     }
 
+    // --wait is a post-load settle: drive the event loop so timers, async work,
+    // and completion callbacks (e.g. testharness's add_completion_callback) run
+    // before we read the page. Returns early once the loop is idle, so static
+    // pages stay fast.
+    page.settle(wait_secs.saturating_mul(1000)).await;
+
+    if let Some(ref expr) = eval {
+        // Bound the eval by the same budget as navigation so a runaway
+        // expression (infinite loop, never-settling sync work) cannot hang.
+        let result = page.evaluate_with_timeout(expr, Duration::from_secs(timeout_secs));
+
+        // A bare --eval (no --selector, no --dump) returns the eval value
+        // directly, so synchronous expressions (JSON.stringify, ...) are
+        // unchanged.
+        if !dump_specified && selector.is_none() {
+            let rendered = match result {
+                serde_json::Value::String(s) => s,
+                serde_json::Value::Null => "null".to_string(),
+                other => other.to_string(),
+            };
+            write_or_print(rendered, output.as_ref()).await?;
+            context.save_session();
+            return Ok(());
+        }
+
+        // --eval combined with --selector and/or --dump: the eval typically
+        // kicks off async work (a fetch promise, a timer) that writes the DOM.
+        // Drive the event loop again so that work completes, then fall through
+        // to the selector wait and the dump path instead of returning the
+        // still-pending eval value (issue #248).
+        page.settle(wait_secs.saturating_mul(1000)).await;
+    }
+
     if let Some(ref sel) = selector {
         let found = wait_for_selector(&mut page, sel, wait_secs).await;
         if !found {
             eprintln!("Warning: selector '{}' not found after {}s", sel, wait_secs);
         }
-    }
-
-    if let Some(ref expr) = eval {
-        let result = page.evaluate(expr);
-        // If the eval triggered `form.submit()`, `location.href = ...`, or
-        // `op_navigate` in any other way, drain the pending navigation so
-        // Set-Cookie headers from the redirect chain land in the jar before
-        // `save_session()` runs. Matches what CDP's Runtime.evaluate does
-        // (see `domains/runtime.rs`). Bounded to keep a pathological
-        // redirect loop from hanging the CLI.
-        for _ in 0..10 {
-            match page.process_pending_navigation().await {
-                Ok(true) => continue,
-                Ok(false) => break,
-                Err(e) => {
-                    eprintln!("Warning: post-eval navigation failed: {}", e);
-                    break;
-                }
-            }
-        }
-        let rendered = match result {
-            serde_json::Value::String(s) => s,
-            serde_json::Value::Null => "null".to_string(),
-            other => other.to_string(),
-        };
-        write_or_print(rendered, output.as_ref()).await?;
-        context.save_session();
-        return Ok(());
     }
 
     let rendered = match dump {
@@ -658,23 +726,24 @@ async fn run_fetch(
         DumpFormat::Links => dump_links(&page),
         DumpFormat::Markdown => dump_markdown(&mut page),
         DumpFormat::Assets => dump_assets(&page),
+        DumpFormat::Cookies => dump_cookies(&page),
         // Handled above via the short-circuit branch; unreachable here.
         DumpFormat::Original => unreachable!("Original dump handled before page navigation"),
     };
     write_or_print(rendered, output.as_ref()).await?;
 
-    // Save full session (cookies + localStorage) to disk if storage_dir is set
+    // Save cookies to disk if storage_dir is configured
     context.save_session();
 
     Ok(())
 }
 
-async fn fetch_original_bytes(
+async fn fetch_original_response(
     url_str: &str,
     proxy: Option<String>,
     user_agent: Option<String>,
     timeout_secs: u64,
-) -> anyhow::Result<Vec<u8>> {
+) -> anyhow::Result<obscura_net::Response> {
     let url = url::Url::parse(url_str)
         .map_err(|e| anyhow::anyhow!("Invalid URL '{}': {}", url_str, e))?;
 
@@ -686,13 +755,156 @@ async fn fetch_original_bytes(
         client.set_user_agent(&ua).await;
     }
 
-    let response = match timeout(Duration::from_secs(timeout_secs), client.fetch(&url)).await {
-        Ok(Ok(resp)) => resp,
+    match timeout(Duration::from_secs(timeout_secs), client.fetch(&url)).await {
+        Ok(Ok(resp)) => Ok(resp),
         Ok(Err(e)) => anyhow::bail!("Failed to fetch {}: {}", url_str, e),
         Err(_) => anyhow::bail!("Timed out fetching {} after {}s", url_str, timeout_secs),
+    }
+}
+
+async fn fetch_original_bytes(
+    url_str: &str,
+    proxy: Option<String>,
+    user_agent: Option<String>,
+    timeout_secs: u64,
+) -> anyhow::Result<Vec<u8>> {
+    Ok(fetch_original_response(url_str, proxy, user_agent, timeout_secs).await?.body)
+}
+
+/// Read newline-delimited URLs from `path` (or stdin when `path` is `-`).
+/// Blank lines and `#` comments are dropped, and surrounding whitespace is
+/// trimmed so a list copy-pasted with indentation still works.
+fn read_urls_from_file(path: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    let content = if path == std::path::Path::new("-") {
+        use std::io::Read;
+        let mut s = String::new();
+        std::io::stdin()
+            .read_to_string(&mut s)
+            .map_err(|e| anyhow::anyhow!("Failed to read URLs from stdin: {}", e))?;
+        s
+    } else {
+        std::fs::read_to_string(path)
+            .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", path.display(), e))?
     };
 
-    Ok(response.body)
+    Ok(content
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(String::from)
+        .collect())
+}
+
+/// Batch raw fetch: run `--dump original` over many URLs concurrently and print
+/// one JSON status line per URL (issue #349). This is the raw-resource-check
+/// counterpart to `scrape`; it never renders, so there is no browser/JS cost
+/// per URL. Output stays in input order regardless of completion order.
+async fn run_batch_fetch(
+    urls: Vec<String>,
+    concurrency: usize,
+    timeout_secs: u64,
+    user_agent: Option<String>,
+    proxy: Option<String>,
+    output: Option<std::path::PathBuf>,
+    quiet: bool,
+) -> anyhow::Result<()> {
+    let total = urls.len();
+    if total == 0 {
+        anyhow::bail!("No URLs to fetch (--file was empty).");
+    }
+
+    if !quiet {
+        eprintln!(
+            "Fetching {} URLs with {} concurrent request(s) (per-fetch timeout: {}s)...",
+            total, concurrency, timeout_secs
+        );
+    }
+
+    let start = Instant::now();
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
+    let user_agent = Arc::new(user_agent);
+    let proxy = Arc::new(proxy);
+
+    let mut handles = Vec::with_capacity(total);
+    for (i, url) in urls.into_iter().enumerate() {
+        let sem = semaphore.clone();
+        let user_agent = user_agent.clone();
+        let proxy = proxy.clone();
+
+        handles.push(tokio::spawn(async move {
+            let _permit = sem.acquire().await.unwrap();
+            let task_start = Instant::now();
+            let result =
+                fetch_original_response(&url, (*proxy).clone(), (*user_agent).clone(), timeout_secs)
+                    .await;
+            let elapsed_ms = task_start.elapsed().as_millis();
+
+            let line = match result {
+                Ok(resp) => serde_json::json!({
+                    "url": url,
+                    "ok": (200..400).contains(&resp.status),
+                    "status": resp.status,
+                    "content_type": resp.headers.get("content-type").cloned().unwrap_or_default(),
+                    "bytes": resp.body.len(),
+                    "elapsed_ms": elapsed_ms,
+                }),
+                Err(e) => serde_json::json!({
+                    "url": url,
+                    "ok": false,
+                    "error": e.to_string(),
+                    "elapsed_ms": elapsed_ms,
+                }),
+            };
+            (i, line)
+        }));
+    }
+
+    let mut results: Vec<Option<serde_json::Value>> = vec![None; total];
+    let mut failures = 0usize;
+    for handle in handles {
+        if let Ok((i, line)) = handle.await {
+            if !line["ok"].as_bool().unwrap_or(false) {
+                failures += 1;
+            }
+            results[i] = Some(line);
+        } else {
+            failures += 1;
+        }
+    }
+
+    let mut out = String::new();
+    for line in results.into_iter().flatten() {
+        out.push_str(&serde_json::to_string(&line).unwrap_or_default());
+        out.push('\n');
+    }
+
+    if let Some(path) = output {
+        tokio::fs::write(&path, out.as_bytes())
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to write {}: {}", path.display(), e))?;
+    } else {
+        let mut stdout = tokio::io::stdout();
+        stdout
+            .write_all(out.as_bytes())
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to write to stdout: {}", e))?;
+        stdout
+            .flush()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to flush stdout: {}", e))?;
+    }
+
+    if !quiet {
+        eprintln!(
+            "Done: {} URLs in {:.1}s ({} ok, {} failed).",
+            total,
+            start.elapsed().as_secs_f64(),
+            total - failures,
+            failures
+        );
+    }
+
+    Ok(())
 }
 
 async fn write_or_print(content: String, output: Option<&std::path::PathBuf>) -> anyhow::Result<()> {
@@ -749,6 +961,11 @@ async fn wait_for_selector(page: &mut Page, selector: &str, timeout_secs: u64) -
     }
 }
 
+fn dump_cookies(page: &Page) -> String {
+    let cookies = page.context.cookie_jar.get_all_cookies();
+    serde_json::to_string_pretty(&cookies).unwrap_or_else(|_| "[]".to_string())
+}
+
 fn dump_html(page: &Page) -> String {
     page.with_dom(|dom| {
         if let Ok(Some(html_node)) = dom.query_selector("html") {
@@ -780,83 +997,85 @@ fn dump_markdown(page: &mut Page) -> String {
 fn extract_readable_text(dom: &obscura_dom::DomTree, node_id: obscura_dom::NodeId) -> String {
     use obscura_dom::NodeData;
 
+    // Iterative DFS over an explicit work stack. A recursive walk overflowed the
+    // call stack (a hard abort, not a catchable panic) on deeply nested pages,
+    // taking down the process on `--dump text` (issue #362, the CLI counterpart
+    // of the serialize/textContent paths made iterative in obscura-dom). A
+    // `Newline` work item emits a block element's trailing newline after its
+    // children, matching the old pre/post-recursion output exactly.
+    enum Work {
+        Visit(obscura_dom::NodeId),
+        Newline,
+    }
+
+    // Defense-in-depth cap mirroring DomTree::descendants; never reached on a
+    // valid tree since append_child / insert_before reject cycles.
+    const MAX_NODES: usize = 5_000_000;
+
     let mut result = String::new();
-    let node = match dom.get_node(node_id) {
-        Some(n) => n,
-        None => return result,
-    };
+    let mut stack: Vec<Work> = vec![Work::Visit(node_id)];
+    let mut visited = 0usize;
 
-    match &node.data {
-        NodeData::Text { contents } => {
-            // Browser-faithful inline-text handling: collapse runs of
-            // whitespace to a single space, but PRESERVE any leading /
-            // trailing whitespace so spaces between sibling inline
-            // elements survive. Previously we ran `contents.trim()` and
-            // dropped both ends, which made content built from a
-            // text/link/text triple (a paragraph like
-            // `"Judge ", <a>FullName</a>, " said …"` assembled by a
-            // content script) render as "JudgeFullNamesaid".
-            // CSS whitespace handling isn't perfect here, but for the
-            // article-text use case (the only consumer of `--dump text`)
-            // matching real-browser rendering is what users expect.
-            if contents.is_empty() {
-                // nothing
-            } else {
-                let mut collapsed = String::with_capacity(contents.len());
-                let mut prev_ws = false;
-                for ch in contents.chars() {
-                    if ch.is_whitespace() {
-                        if !prev_ws {
-                            collapsed.push(' ');
-                        }
-                        prev_ws = true;
-                    } else {
-                        collapsed.push(ch);
-                        prev_ws = false;
-                    }
-                }
-                if !collapsed.trim().is_empty() || contents.chars().any(|c| c.is_whitespace()) {
-                    result.push_str(&collapsed);
+    while let Some(work) = stack.pop() {
+        let id = match work {
+            Work::Newline => {
+                result.push('\n');
+                continue;
+            }
+            Work::Visit(id) => id,
+        };
+
+        visited += 1;
+        if visited > MAX_NODES {
+            break;
+        }
+
+        let node = match dom.get_node(id) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        match &node.data {
+            NodeData::Text { contents } => {
+                let trimmed = contents.trim();
+                if !trimmed.is_empty() {
+                    result.push_str(trimmed);
                 }
             }
-        }
-        NodeData::Element { name, .. } => {
-            let tag = name.local.as_ref();
-            let is_block = matches!(
-                tag,
-                "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
-                    | "li" | "tr" | "br" | "hr" | "blockquote" | "pre"
-                    | "section" | "article" | "header" | "footer" | "nav"
-                    | "main" | "aside" | "figure" | "figcaption" | "table"
-                    | "thead" | "tbody" | "tfoot" | "dl" | "dt" | "dd"
-                    | "ul" | "ol"
-            );
+            NodeData::Element { name, .. } => {
+                let tag = name.local.as_ref();
 
-            // Boilerplate elements rarely contain content the user wants to
-            // scrape — strip them so `--dump text` returns the article body
-            // instead of menus, footers, and cookie banners.
-            if matches!(
-                tag,
-                "script" | "style" | "nav" | "header" | "footer" | "aside"
-            ) {
-                return result;
-            }
+                // Boilerplate elements rarely contain content the user wants to
+                // scrape — strip them so `--dump text` returns the article body
+                // instead of menus, footers, and cookie banners.
+                if matches!(tag, "script" | "style" | "nav" | "header" | "footer" | "aside") {
+                    continue;
+                }
 
-            if is_block {
-                result.push('\n');
-            }
+                let is_block = matches!(
+                    tag,
+                    "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+                        | "li" | "tr" | "br" | "hr" | "blockquote" | "pre"
+                        | "section" | "article" | "header" | "footer" | "nav"
+                        | "main" | "aside" | "figure" | "figcaption" | "table"
+                        | "thead" | "tbody" | "tfoot" | "dl" | "dt" | "dd"
+                        | "ul" | "ol"
+                );
 
-            for child_id in dom.children(node_id) {
-                result.push_str(&extract_readable_text(dom, child_id));
+                if is_block {
+                    result.push('\n');
+                    // Processed after all children (stack is LIFO): the trailing newline.
+                    stack.push(Work::Newline);
+                }
+                // Push children in reverse so they pop in document order.
+                for child_id in dom.children(id).into_iter().rev() {
+                    stack.push(Work::Visit(child_id));
+                }
             }
-
-            if is_block {
-                result.push('\n');
-            }
-        }
-        _ => {
-            for child_id in dom.children(node_id) {
-                result.push_str(&extract_readable_text(dom, child_id));
+            _ => {
+                for child_id in dom.children(id).into_iter().rev() {
+                    stack.push(Work::Visit(child_id));
+                }
             }
         }
     }
@@ -872,6 +1091,7 @@ async fn run_parallel_scrape(
     timeout_secs: u64,
     quiet: bool,
     proxy: Option<String>,
+    stealth: bool,
 ) -> anyhow::Result<()> {
     let total = urls.len();
     let start = Instant::now();
@@ -924,6 +1144,7 @@ async fn run_parallel_scrape(
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::null())
                 .env("OBSCURA_PROXY", proxy.as_deref().unwrap_or(""))
+                .env("OBSCURA_STEALTH", if stealth { "1" } else { "" })
                 .spawn()
             {
                 Ok(c) => c,
@@ -1217,16 +1438,39 @@ fn extract_assets(dom: &obscura_dom::DomTree, base_url: Option<&url::Url>) -> St
 
 fn dump_assets(page: &Page) -> String {
     let base_url = page.url.clone();
-    page.with_dom(|dom| extract_assets(dom, base_url.as_ref())).unwrap_or_default()
+    let dom_ndjson = page
+        .with_dom(|dom| extract_assets(dom, base_url.as_ref()))
+        .unwrap_or_default();
+
+    let mut lines: Vec<String> =
+        dom_ndjson.lines().filter(|l| !l.is_empty()).map(|l| l.to_string()).collect();
+
+    // URLs already listed from static DOM attributes, so a resource the script
+    // fetches that the markup also references is not emitted twice.
+    let mut seen: std::collections::HashSet<String> = lines
+        .iter()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter_map(|v| v.get("url").and_then(|u| u.as_str()).map(|s| s.to_string()))
+        .collect();
+
+    // Resources pulled in by JS fetch()/XHR, which leave no static DOM tag
+    // (issue #301).
+    for url in page.fetched_urls() {
+        if seen.insert(url.clone()) {
+            lines.push(serde_json::json!({ "url": url, "type": "fetch" }).to_string());
+        }
+    }
+
+    lines.join("\n")
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_assets, extract_readable_text, fetch_original_bytes, is_quiet_command,
-        link_kind_from_rel, merge_proxy, normalize_v8_flags, reject_stealth_with_socks5,
-        resolve_asset_url, select_log_filter, write_or_print, write_or_print_bytes, Args,
-        Command, DumpFormat,
+        effective_v8_flags, extract_assets, extract_readable_text, fetch_original_bytes,
+        is_quiet_command, link_kind_from_rel, merge_proxy, normalize_v8_flags,
+        read_urls_from_file, resolve_asset_url, select_log_filter, write_or_print,
+        write_or_print_bytes, Args, Command, DumpFormat, DEFAULT_V8_FLAGS,
     };
     use clap::Parser;
     use obscura_dom::parse_html;
@@ -1253,10 +1497,65 @@ mod tests {
         .expect("clap should accept --dump original");
         match args.command {
             Some(Command::Fetch { dump, .. }) => {
-                assert_eq!(dump, DumpFormat::Original);
+                assert_eq!(dump, Some(DumpFormat::Original));
             }
             _ => panic!("expected Fetch command"),
         }
+    }
+
+    // Issue #349 — batch mode: `fetch --file urls.txt --dump original
+    // --concurrency N` with no positional URL.
+    #[test]
+    fn parsed_fetch_file_and_concurrency() {
+        let args = Args::try_parse_from([
+            "obscura",
+            "fetch",
+            "--file",
+            "urls.txt",
+            "--dump",
+            "original",
+            "--concurrency",
+            "25",
+        ])
+        .expect("clap should accept --file with --concurrency and no positional URL");
+        match args.command {
+            Some(Command::Fetch { url, file, concurrency, dump, .. }) => {
+                assert!(url.is_none());
+                assert_eq!(file, Some(std::path::PathBuf::from("urls.txt")));
+                assert_eq!(concurrency.get(), 25);
+                assert_eq!(dump, Some(DumpFormat::Original));
+            }
+            _ => panic!("expected Fetch command"),
+        }
+    }
+
+    #[test]
+    fn concurrency_rejects_zero() {
+        // NonZeroUsize means --concurrency 0 is a parse error, not a silent hang
+        // on a zero-permit semaphore.
+        let err = Args::try_parse_from(["obscura", "fetch", "--file", "u.txt", "--concurrency", "0"]);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn read_urls_skips_blanks_and_comments() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("obscura_urls_{}.txt", std::process::id()));
+        std::fs::write(
+            &path,
+            "https://a.example/one.js\n\n  # a comment\n   https://b.example/two.css  \nhttps://c.example/three.json\n",
+        )
+        .unwrap();
+        let urls = read_urls_from_file(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(
+            urls,
+            vec![
+                "https://a.example/one.js".to_string(),
+                "https://b.example/two.css".to_string(),
+                "https://c.example/three.json".to_string(),
+            ]
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1476,38 +1775,27 @@ mod tests {
     }
 
     #[test]
-    fn reject_stealth_with_socks5_passes_when_no_stealth() {
-        assert!(reject_stealth_with_socks5(Some("socks5://127.0.0.1:1080"), false).is_ok());
+    fn effective_v8_flags_returns_default_when_unset() {
+        assert_eq!(effective_v8_flags(None), DEFAULT_V8_FLAGS);
+        assert_eq!(effective_v8_flags(Some("")), DEFAULT_V8_FLAGS);
+        assert_eq!(effective_v8_flags(Some("   ")), DEFAULT_V8_FLAGS);
     }
 
     #[test]
-    fn reject_stealth_with_socks5_passes_when_no_proxy() {
-        assert!(reject_stealth_with_socks5(None, true).is_ok());
+    fn effective_v8_flags_user_overrides_default() {
+        // V8 parses left-to-right and later wins, so the user value must
+        // come after the default in the merged string.
+        let user = "--max-old-space-size=8192";
+        let merged = effective_v8_flags(Some(user));
+        assert!(merged.starts_with(DEFAULT_V8_FLAGS));
+        assert!(merged.ends_with(user));
     }
 
     #[test]
-    fn reject_stealth_with_socks5_passes_for_http_proxy() {
-        assert!(reject_stealth_with_socks5(Some("http://127.0.0.1:8080"), true).is_ok());
-        assert!(reject_stealth_with_socks5(Some("https://proxy.example:443"), true).is_ok());
-    }
-
-    #[test]
-    fn reject_stealth_with_socks5_fails_for_socks5() {
-        let err = reject_stealth_with_socks5(Some("socks5://127.0.0.1:9999"), true).unwrap_err();
-        assert!(err.to_string().contains("SOCKS5"));
-        assert!(err.to_string().contains("--stealth"));
-    }
-
-    #[test]
-    fn reject_stealth_with_socks5_fails_for_socks5h() {
-        let err = reject_stealth_with_socks5(Some("socks5h://127.0.0.1:9999"), true).unwrap_err();
-        assert!(err.to_string().contains("SOCKS5"));
-    }
-
-    #[test]
-    fn reject_stealth_with_socks5_is_case_insensitive() {
-        let err = reject_stealth_with_socks5(Some("SOCKS5://127.0.0.1:9999"), true).unwrap_err();
-        assert!(err.to_string().contains("SOCKS5"));
+    fn effective_v8_flags_appends_user_extras() {
+        let merged = effective_v8_flags(Some("--expose-gc"));
+        assert!(merged.contains(DEFAULT_V8_FLAGS));
+        assert!(merged.contains("--expose-gc"));
     }
 
     #[test]
@@ -1526,14 +1814,15 @@ mod tests {
     #[test]
     fn matcher_still_uses_fetch_variant() {
         let cmd = Some(Command::Fetch {
-            url: "https://x".to_string(),
-            dump: super::DumpFormat::Html,
+            url: Some("https://x".to_string()),
+            dump: Some(super::DumpFormat::Html),
             selector: None,
+            file: None,
+            concurrency: std::num::NonZeroUsize::new(1).unwrap(),
             wait: 5,
             timeout: 30,
             wait_until: "load".to_string(),
             user_agent: None,
-            stealth: false,
             eval: None,
             quiet: true,
             output: None,
@@ -1616,7 +1905,7 @@ mod tests {
         .expect("clap should accept --dump assets");
         match args.command {
             Some(Command::Fetch { dump, .. }) => {
-                assert_eq!(dump, DumpFormat::Assets);
+                assert_eq!(dump, Some(DumpFormat::Assets));
             }
             _ => panic!("expected Fetch command"),
         }

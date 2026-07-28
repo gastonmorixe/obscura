@@ -167,6 +167,15 @@ impl<'i> parser::Parser<'i> for ObscuraSelectorParser {
     type Impl = ObscuraSelector;
     type Error = SelectorParseErrorKind<'i>;
 
+    // Allow `:has()`. The selectors crate gates relative-selector parsing on
+    // this (default false), so without it `a:has(p)` failed to parse and the
+    // error was swallowed into an empty match set. Matching already passes a
+    // SelectorCaches (which holds the relative-selector cache), so enabling
+    // parsing is sufficient.
+    fn parse_has(&self) -> bool {
+        true
+    }
+
     fn parse_non_ts_pseudo_class(
         &self,
         _location: cssparser::SourceLocation,
@@ -219,7 +228,18 @@ impl<'a> Element for DomElement<'a> {
     type Impl = ObscuraSelector;
 
     fn opaque(&self) -> OpaqueElement {
-        OpaqueElement::new(self)
+        // Must be stable per node. DomElement is Copy and gets a fresh stack
+        // address on every traversal step, so OpaqueElement::new(self) returns a
+        // different id for the same node each call. That breaks `:has` anchor
+        // matching, which compares the anchor's opaque against the element
+        // reached by walking up the tree. Key off the node's stable slot in the
+        // tree's Vec instead (OpaqueElement only compares the address, never
+        // dereferences it, and the Vec is not mutated during a query).
+        let inner = self.tree.borrow_inner();
+        match inner.nodes.get(self.node_id.index()) {
+            Some(slot) => OpaqueElement::new(slot),
+            None => OpaqueElement::new(self),
+        }
     }
 
     fn parent_element(&self) -> Option<Self> {
@@ -491,11 +511,60 @@ impl<'a> Element for DomElement<'a> {
     }
 }
 
-pub fn parse_selector(selector: &str) -> Result<SelectorList<ObscuraSelector>, String> {
+// Thread-local LRU cache of parsed selectors. Without this every
+// querySelector / querySelectorAll re-parses the selector string;
+// for batch-heavy DOM access (agent scraping a table, framework
+// repeatedly polling for elements) the parse cost adds up to tens
+// of ms per page. Cap of 256 entries fits a typical page's distinct
+// selectors without unbounded memory growth.
+thread_local! {
+    static SELECTOR_CACHE: std::cell::RefCell<
+        std::collections::HashMap<String, std::sync::Arc<SelectorList<ObscuraSelector>>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::with_capacity(64));
+}
+const SELECTOR_CACHE_CAP: usize = 256;
+
+fn parse_selector_uncached(selector: &str) -> Result<SelectorList<ObscuraSelector>, String> {
     let mut parser_input = cssparser::ParserInput::new(selector);
     let mut parser = cssparser::Parser::new(&mut parser_input);
     SelectorList::parse(&ObscuraSelectorParser, &mut parser, ParseRelative::No)
         .map_err(|e| format!("Failed to parse selector '{}': {:?}", selector, e))
+}
+
+pub fn parse_selector(selector: &str) -> Result<SelectorList<ObscuraSelector>, String> {
+    // Hot path: cached. Cold path: parse + insert.
+    if let Some(cached) = SELECTOR_CACHE.with(|c| c.borrow().get(selector).cloned()) {
+        return Ok((*cached).clone());
+    }
+    let parsed = parse_selector_uncached(selector)?;
+    let cached = std::sync::Arc::new(parsed.clone());
+    SELECTOR_CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        // Crude eviction: if at cap, dump the whole table. A real LRU
+        // would be more memory-friendly but selectors are small and 256
+        // is comfortably above a single page's distinct-selector count.
+        if cache.len() >= SELECTOR_CACHE_CAP {
+            cache.clear();
+        }
+        cache.insert(selector.to_string(), cached);
+    });
+    Ok(parsed)
+}
+
+/// If `selector` is a bare ASCII id selector like `#main`, return the id (without
+/// the `#`). Conservative: escapes, combinators, commas, whitespace, non-ASCII, or
+/// a non-letter/underscore first character fall through to the full selector engine.
+fn simple_id_selector(selector: &str) -> Option<&str> {
+    let id = selector.trim().strip_prefix('#')?;
+    let first = id.as_bytes().first().copied()?;
+    if !(first.is_ascii_alphabetic() || first == b'_') {
+        return None;
+    }
+    if id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        Some(id)
+    } else {
+        None
+    }
 }
 
 impl DomTree {
@@ -508,6 +577,21 @@ impl DomTree {
     }
 
     pub fn query_selector_from(&self, root: NodeId, selector: &str) -> Result<Option<NodeId>, String> {
+        // Fast path: a bare "#id" selector resolves through the id index in O(1)
+        // instead of scanning every descendant. The index holds the first element
+        // in tree order per id, which is exactly what the full scan would return.
+        if let Some(id) = simple_id_selector(selector) {
+            match self.get_element_by_id(id) {
+                // querySelector matches strict descendants of root only, so the
+                // indexed element must have root among its ancestors.
+                Some(nid) if self.ancestors(nid).contains(&root) => return Ok(Some(nid)),
+                // Index miss or stale entry (detached node) — fall through to full scan.
+                // The id_index is best-effort: it only registers nodes at creation time
+                // and does not update on reparent, so it can point to a detached clone
+                // while the live node (with the same id) is elsewhere in the tree.
+                _ => {}
+            }
+        }
         let selector_list = parse_selector(selector)?;
         let mut caches = selectors::context::SelectorCaches::default();
         let mut context = MatchingContext::new(
@@ -600,6 +684,21 @@ mod tests {
         let tree = parse_html("<ul><li>1</li><li>2</li><li>3</li></ul>");
         let results = tree.query_selector_all("li").unwrap();
         assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn test_has_parses() {
+        // Isolate parse from match: :has must parse, not error.
+        assert!(super::parse_selector("a:has(p.bt)").is_ok(), ":has failed to parse");
+    }
+
+    #[test]
+    fn test_query_selector_has() {
+        let tree = parse_html(r#"<a><p class="bt">x</p></a>"#);
+        let all = tree.query_selector_all("a:has(p.bt)").unwrap();
+        assert_eq!(all.len(), 1, "a:has(p.bt) should match the <a>");
+        let none = tree.query_selector_all("a:has(span.bt)").unwrap();
+        assert_eq!(none.len(), 0, "a:has(span.bt) should match nothing");
     }
 
     #[test]
