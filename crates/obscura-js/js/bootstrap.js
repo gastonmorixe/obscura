@@ -158,39 +158,49 @@ if (_origStackDesc && _origStackDesc.get) {
 }
 
 let _fpSeed = 0;
-// Dynamic script import queue — serializes concurrent import() calls
-// to prevent re-entrant RefCell panic in deno_core's futures_unordered_driver
-// when SPAs dynamically insert multiple <script module> tags at once.
+// Module imports are serialized to prevent re-entrant RefCell panics in
+// deno_core's futures_unordered_driver. Classic dynamic scripts are fetched in
+// parallel, matching browser behavior for script elements created by JS; putting
+// those through the module queue made webpack apps load dozens of chunks one at
+// a time.
 let __dynScriptQueue = [];
 let __dynScriptBusy = false;
+let __dynScriptPending = 0;
+async function __loadDynClassic(task) {
+  __dynScriptPending++;
+  try {
+    const raw = await Deno.core.ops.op_fetch_url(task.url, "GET", "{}", "", task.pageOrigin, "no-cors");
+    const parsed = JSON.parse(raw);
+    if (parsed.blocked || parsed.status < 200 || parsed.status >= 300) {
+      throw new Error(parsed.error || ('HTTP ' + (parsed.status || 0)));
+    }
+    globalThis.__currentScriptNid = task.nid;
+    try { if (parsed.body) (0, eval)(parsed.body); }
+    finally { globalThis.__currentScriptNid = task.prevNid || 0; }
+    // Fire via dispatchEvent only: it invokes both the onload property and
+    // addEventListener handlers. Calling onload separately would double-fire.
+    try { task.dispatchEvent(new Event('load')); } catch(e) {}
+  } catch(e) {
+    console.error('Dynamic script error (' + task.url + '):', e.message);
+    try { task.dispatchEvent(new Event('error')); } catch(ex) {}
+  } finally {
+    __dynScriptPending--;
+  }
+}
 async function __processDynScriptQueue() {
   if (__dynScriptBusy) return;
   __dynScriptBusy = true;
   // try/finally so the busy flag is always cleared even if a task throws
   // outside its own guard; otherwise the queue would wedge and silently
-  // block every later dynamic script on the page.
+  // block every later dynamic module on the page.
   try {
     while (__dynScriptQueue.length > 0) {
       const task = __dynScriptQueue.shift();
       try {
-        if (task.isModule) {
-          await import(task.url);
-        } else {
-          const raw = await Deno.core.ops.op_fetch_url(task.url, "GET", "{}", "", task.pageOrigin, "no-cors");
-          const parsed = JSON.parse(raw);
-          if (parsed.body) {
-            globalThis.__currentScriptNid = task.nid;
-            try { (0, eval)(parsed.body); }
-            catch(e) { console.error('Dynamic script error (' + task.url + '):', e.message); }
-            finally { globalThis.__currentScriptNid = task.prevNid || 0; }
-          }
-        }
-        // Fire load via dispatchEvent only: it invokes the element's onload
-        // property handler and any addEventListener('load') listeners, read
-        // live off the element. Calling onload separately would double-fire it.
+        await import(task.url);
         try { task.dispatchEvent(new Event('load')); } catch(e) {}
       } catch(e) {
-        console.error('Dynamic script fetch error:', e.message);
+        console.error('Dynamic module error (' + task.url + '):', e.message);
         try { task.dispatchEvent(new Event('error')); } catch(ex) {}
       }
     }
@@ -703,17 +713,24 @@ class Node {
           fullUrl = src;
         }
         const pageOrigin = (function() { try { return new URL(baseUrl).origin; } catch(e) { return ""; } })();
-        // Enqueue — serialized via __processDynScriptQueue to prevent
-        // concurrent import() calls from triggering deno_core RefCell panic.
-        __dynScriptQueue.push({
+        const task = {
           url: fullUrl,
           isModule,
           nid: c._nid,
           prevNid,
           pageOrigin,
           dispatchEvent: (ev) => { try { c.dispatchEvent(ev); } catch(e) {} },
-        });
-        __processDynScriptQueue();
+        };
+        if (isModule) {
+          // Keep only module imports serialized; deno_core cannot safely drive
+          // concurrent module graph loads in this runtime.
+          __dynScriptQueue.push(task);
+          __processDynScriptQueue();
+        } else {
+          // Dynamically-created classic scripts are async by default in browsers.
+          // Fetch them concurrently instead of serializing a large webpack graph.
+          __loadDynClassic(task);
+        }
       } else {
         const code = c.textContent;
         if (code) {

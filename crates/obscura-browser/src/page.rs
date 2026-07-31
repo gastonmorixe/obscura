@@ -1007,6 +1007,16 @@ impl Page {
                 match result {
                     Ok(Ok(())) => {
                         if self.http_client.active_requests() == 0 {
+                            // A dynamic script fetch/import can be pending in the
+                            // JS-side queue without incrementing this client's
+                            // request counter. Do not report idle while that queue
+                            // is still busy, or webpack apps are observed halfway
+                            // through loading their chunks.
+                            if js.has_pending_dynamic_scripts() {
+                                idle_count = 0;
+                                tokio::task::yield_now().await;
+                                continue;
+                            }
                             idle_count += 1;
                             if idle_count >= 2 {
                                 break;

@@ -32,13 +32,13 @@ async fn serve() -> String {
 setTimeout(function () {
   var direct = document.createElement("script");
   direct.src = "/direct.js";
-  direct.onload = function () { window.__directLoaded = true; };
+  direct.onload = function () { window.__directLoaded = true; (window.__loadOrder ||= []).push('direct'); };
   document.body.appendChild(direct);
 
   var box = document.createElement("div");
   var nested = document.createElement("script");
   nested.src = "/nested.js";
-  nested.onload = function () { window.__nestedLoaded = true; };
+  nested.onload = function () { window.__nestedLoaded = true; (window.__loadOrder ||= []).push('nested'); };
   box.appendChild(nested);
   document.body.appendChild(box);
 }, 100);
@@ -105,7 +105,7 @@ async fn dynamic_external_scripts_execute_and_fire_load() {
         2,
         "Runtime.evaluate",
         json!({
-            "expression": "JSON.stringify({directExecuted: !!window.__directExecuted, directLoaded: !!window.__directLoaded, nestedExecuted: !!window.__nestedExecuted, nestedLoaded: !!window.__nestedLoaded})",
+            "expression": "JSON.stringify({directExecuted: !!window.__directExecuted, directLoaded: !!window.__directLoaded, nestedExecuted: !!window.__nestedExecuted, nestedLoaded: !!window.__nestedLoaded, loadOrder: window.__loadOrder || []})",
             "returnByValue": true,
         }),
         session_id,
@@ -113,7 +113,7 @@ async fn dynamic_external_scripts_execute_and_fire_load() {
     .await;
     assert_eq!(
         result["result"]["value"],
-        r#"{"directExecuted":true,"directLoaded":true,"nestedExecuted":true,"nestedLoaded":true}"#,
-        "dynamic scripts must execute and fire load before navigation settles"
+        r#"{"directExecuted":true,"directLoaded":true,"nestedExecuted":true,"nestedLoaded":true,"loadOrder":["nested","direct"]}"#,
+        "dynamic classic scripts must execute concurrently and fire load before navigation settles"
     );
 }

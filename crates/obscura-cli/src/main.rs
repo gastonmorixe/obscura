@@ -1048,7 +1048,7 @@ fn extract_readable_text(dom: &obscura_dom::DomTree, node_id: obscura_dom::NodeI
                 // Boilerplate elements rarely contain content the user wants to
                 // scrape — strip them so `--dump text` returns the article body
                 // instead of menus, footers, and cookie banners.
-                if matches!(tag, "script" | "style" | "nav" | "header" | "footer" | "aside") {
+                if matches!(tag, "script" | "style" | "noscript" | "nav" | "header" | "footer" | "aside") {
                     continue;
                 }
 
@@ -1862,18 +1862,20 @@ mod tests {
     }
 
     #[test]
-    fn still_skips_script_and_style() {
-        // Regression guard for the original skip list.
+    fn still_skips_script_style_and_noscript() {
+        // Script/style source and the no-JS fallback are not rendered page text.
         let text = body_text(
             r#"<html><body>
                 <p>Hello.</p>
                 <script>console.log("nope")</script>
                 <style>.x { color: red }</style>
+                <noscript>JavaScript is not available.</noscript>
             </body></html>"#,
         );
         assert!(text.contains("Hello."));
         assert!(!text.contains("console.log"));
         assert!(!text.contains("color: red"));
+        assert!(!text.contains("JavaScript is not available"));
     }
 
     #[test]

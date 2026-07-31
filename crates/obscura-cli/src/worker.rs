@@ -1,3 +1,4 @@
+mod fetch_worker;
 
 use std::sync::Arc;
 
@@ -46,6 +47,11 @@ async fn main() {
         .with_env_filter("warn")
         .with_writer(std::io::stderr)
         .init();
+
+    if std::env::args().skip(1).any(|arg| arg == "--fetch-protocol") {
+        fetch_worker::run().await;
+        return;
+    }
 
     let proxy = std::env::var("OBSCURA_PROXY")
         .ok()

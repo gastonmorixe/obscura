@@ -32,3 +32,5 @@
 * [Architecture overview](Architecture-overview.md)
 * [Adding a CDP method or Web API](Adding-a-CDP-method-or-Web-API.md)
 * [Testing and debugging](Testing-and-debugging.md)
+* [X login JavaScript investigation](X-login-JavaScript-investigation.md)
+* [Persistent fetch worker protocol](persistent-fetch-worker-protocol.md)

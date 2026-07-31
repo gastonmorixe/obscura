@@ -45,10 +45,13 @@ pub async fn handle(
 }
 
 /// Walk the full DOM tree and produce CDP Accessibility AXNode array.
-fn build_ax_nodes(dom: &DomTree) -> Vec<Value> {
+pub fn build_ax_nodes(dom: &DomTree) -> Vec<Value> {
     let mut nodes: Vec<Value> = Vec::new();
-    let mut id_counter: u32 = 0;
-    // Map DOM NodeId → AX string id, populated only for nodes actually in the AX tree
+    // Map DOM NodeId → AX string id, populated only for nodes actually in the AX tree.
+    // Using the DOM node id instead of a preorder counter keeps AX node ids stable
+    // when an unrelated sibling is inserted earlier in the document. A new
+    // navigation builds a new DomTree, so callers must still invalidate ids at
+    // the navigation boundary, matching CDP's document-scoped semantics.
     let mut dom_to_ax: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
 
     let document = dom.document();
@@ -64,8 +67,7 @@ fn build_ax_nodes(dom: &DomTree) -> Vec<Value> {
         if let Some(node) = dom.get_node(*dom_id) {
             let role = map_role(&node.data);
             if !role.is_empty() {
-                id_counter += 1;
-                dom_to_ax.insert(dom_id.raw(), id_counter.to_string());
+                dom_to_ax.insert(dom_id.raw(), format!("ax-{}", dom_id.raw()));
                 eligible.push(*dom_id);
             }
         }
@@ -79,6 +81,56 @@ fn build_ax_nodes(dom: &DomTree) -> Vec<Value> {
     }
 
     nodes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_ax_nodes;
+    use obscura_dom::parse_html;
+
+    #[test]
+    fn full_tree_uses_dom_scoped_ids_and_synthetic_bounds() {
+        let dom = parse_html(
+            r#"<!doctype html><html><body><button aria-label="Save">ignored</button></body></html>"#,
+        );
+        let nodes = build_ax_nodes(&dom);
+        let button = nodes
+            .iter()
+            .find(|node| node["role"]["value"] == "button")
+            .expect("button AX node");
+
+        let backend_id = button["backendDOMNodeId"].as_u64().unwrap();
+        assert_eq!(button["nodeId"], format!("ax-{backend_id}"));
+        assert_eq!(button["name"]["value"], "Save");
+        assert_eq!(button["bounds"]["synthetic"], true);
+        assert_eq!(button["bounds"]["height"], 24);
+    }
+
+    #[test]
+    fn ids_of_existing_nodes_survive_unrelated_append() {
+        let dom = parse_html(r#"<html><body><button id="save">Save</button></body></html>"#);
+        let before = build_ax_nodes(&dom);
+        let before_id = before
+            .iter()
+            .find(|node| node["role"]["value"] == "button")
+            .and_then(|node| node["nodeId"].as_str())
+            .unwrap()
+            .to_string();
+
+        // Rebuilding with an unrelated later sibling gives the existing nodes
+        // the same DOM ids; AX ids therefore remain stable as well.
+        let rebuilt = parse_html(
+            r#"<html><body><button id="save">Save</button><div>later</div></body></html>"#,
+        );
+        let after = build_ax_nodes(&rebuilt);
+        let after_id = after
+            .iter()
+            .find(|node| node["role"]["value"] == "button")
+            .and_then(|node| node["nodeId"].as_str())
+            .unwrap();
+
+        assert_eq!(before_id, after_id);
+    }
 }
 
 fn build_ax_node(
@@ -99,11 +151,21 @@ fn build_ax_node(
     let value = compute_value(dom, &node);
     let properties = compute_properties(dom, &node);
 
-    let child_ids: Vec<String> = dom
-        .children(node_id)
-        .iter()
-        .filter_map(|child_id| dom_to_ax.get(&child_id.raw()).cloned())
-        .collect();
+    // AX children are the nearest eligible descendants. A direct DOM child
+    // such as a comment/doctype can be omitted from the AX tree without
+    // orphaning eligible nodes below it.
+    let mut child_ids: Vec<String> = Vec::new();
+    let mut pending = dom.children(node_id);
+    pending.reverse();
+    while let Some(child_id) = pending.pop() {
+        if let Some(ax_id) = dom_to_ax.get(&child_id.raw()) {
+            child_ids.push(ax_id.clone());
+        } else {
+            let mut grandchildren = dom.children(child_id);
+            grandchildren.reverse();
+            pending.extend(grandchildren);
+        }
+    }
 
     // Resolve parentId — walk DOM ancestors until we find one in the AX tree
     let parent_id: Option<String> = {
@@ -148,6 +210,19 @@ fn build_ax_node(
         ax_node.as_object_mut().unwrap().insert("childIds".into(), json!(child_ids));
     }
     ax_node.as_object_mut().unwrap().insert("backendDOMNodeId".into(), json!(node_id.raw()));
+    // Bounds are synthetic because Obscura is headless and has no layout
+    // engine. They remain deterministic for this DOM node and are explicitly
+    // marked synthetic so agent clients do not mistake them for paint geometry.
+    ax_node.as_object_mut().unwrap().insert(
+        "bounds".into(),
+        json!({
+            "x": 0,
+            "y": node_id.raw().saturating_mul(24),
+            "width": 1024,
+            "height": 24,
+            "synthetic": true,
+        }),
+    );
 
     Some(ax_node)
 }

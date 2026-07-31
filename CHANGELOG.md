@@ -9,6 +9,18 @@ under *Unreleased* land in the next tag.
 
 ### Added
 
+- **Persistent Fetch worker protocol.** `obscura-worker --fetch-protocol`
+  provides a versioned, bounded NDJSON transport for lazy process reuse,
+  ephemeral fetches, and up to eight named in-memory sessions. It enforces one
+  live V8 isolate, saves named cookies and localStorage after each request and
+  during eviction/shutdown, exposes status and graceful close operations, and
+  retains the original no-argument scrape-worker protocol, and loads the first
+  configured WebExtension for all worker-created contexts. See
+  [`docs/persistent-fetch-worker-protocol.md`](docs/persistent-fetch-worker-protocol.md).
+- **Accessibility Fetch output.** The persistent worker accepts
+  `format: "accessibility"` and returns the CDP-compatible AXNode tree used by
+  `Accessibility.getFullAXTree`. IDs derive from document-scoped DOM node IDs,
+  and synthetic bounds are explicitly marked.
 - **Persistent `localStorage`.** `--storage-dir <DIR>` now keeps
   per-origin `localStorage` alive across runs, alongside the cookie
   jar that already shipped on this branch. Stored as
@@ -56,6 +68,26 @@ under *Unreleased* land in the next tag.
 
 ### Changed
 
+- **Dynamic classic scripts now load concurrently.** JavaScript-created
+  classic `<script src>` elements no longer share the serialized ES-module
+  import queue. This removes a large webpack chunk bottleneck observed on X:
+  the old queue accumulated 14 to 32 scripts while the login application
+  waited. Module imports remain serialized to protect `deno_core` from
+  reentrant graph loading. Concurrent classic requests are now counted as
+  pending work, the post-script settle loop will not report idle while either
+  loader path is active, and blocked, non-success HTTP, fetch-failed, or
+  evaluation-failed scripts dispatch `error` instead of incorrectly
+  dispatching `load`. The dynamic-script CDP regression now verifies that a
+  fast classic script can finish before an earlier slow one.
+- **Text dumps ignore `<noscript>`.** `--dump text` previously reported inert
+  no-JavaScript fallbacks as page content. On X this produced the misleading
+  `JavaScript is not available` result even though the runtime, vendor, and
+  main bundles had executed. Text extraction now skips `noscript` alongside
+  `script` and `style`.
+- Added a detailed account of the X login investigation, CLI wait and timeout
+  semantics, the fixes above, remaining lifecycle and script-loader gaps, and
+  recommended diagnostic commands in
+  [`docs/X-login-JavaScript-investigation.md`](docs/X-login-JavaScript-investigation.md).
 - `bootstrap.js` `localStorage` is no longer a `{}`-backed closure
   that dies with the V8 isolate. It's now a `Proxy`-wrapped
   Storage-prototype object that dispatches to Rust-side ops, so the

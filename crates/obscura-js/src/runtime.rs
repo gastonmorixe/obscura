@@ -887,7 +887,7 @@ impl ObscuraJsRuntime {
     /// than window properties, so page code cannot overwrite this state.
     pub fn has_pending_dynamic_scripts(&mut self) -> bool {
         self.evaluate(
-            "typeof __dynScriptBusy !== 'undefined' && (__dynScriptBusy || __dynScriptQueue.length > 0)",
+            "typeof __dynScriptBusy !== 'undefined' && (__dynScriptBusy || __dynScriptQueue.length > 0 || (typeof __dynScriptPending !== 'undefined' && __dynScriptPending > 0))",
         )
         .ok()
         .and_then(|value| value.as_bool())
