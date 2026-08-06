@@ -1,11 +1,9 @@
 name: Dist Release (public binaries)
 
 # Cross-publishes COMPILED obscura binaries from this PRIVATE source repo to a
-# PUBLIC dist repo's Releases. The source stays private; only the artifacts go
-# public, which gives stable, anonymous, token-less download URLs that the
-# minimal-agent ma-fetch plugin can hardcode in its setup() (private release
-# assets have no such URL. Every download needs a token, and the CDN URL is
-# signed + expiring).
+# PRIVATE dist repo's Releases (`gastonmorixe/obscura-dist`). The source stays
+# private; ma-fetch pulls assets via the GitHub API with an embedded
+# read-only PAT (private release CDN URLs are signed + expiring).
 #
 # Assets are named with a BUILD EPOCH (obscura-<target>-<epoch>.tar.gz) so a
 # newer build sorts above an older one by filename alone, letting the plugin
@@ -13,11 +11,12 @@ name: Dist Release (public binaries)
 #
 # Trigger: every push to the private gm/private branch (continuous fresh
 # builds), plus manual dispatch. The dist release is updated in place under a
-# rolling `latest` tag AND a unique `build-<epoch>` tag for pinning.
+# rolling `latest` tag AND a unique `build-<epoch>` tag for pinning. ma-fetch
+# resolves `latest` at setup() time (no hardcoded pin).
 #
 # Required secret: DIST_REPO_TOKEN, a fine-grained PAT with `contents: write`
-# on the PUBLIC dist repo (gastonmorixe/obscura-dist). Set DIST_REPO to
-# override the default target.
+# on the dist repo (gastonmorixe/obscura-dist). Set DIST_REPO to override the
+# default target.
 
 on:
   push:
@@ -137,10 +136,23 @@ jobs:
           } > dist/manifest-${EPOCH}.json
           cat dist/manifest-${EPOCH}.json
 
-      # Publish to the PUBLIC dist repo under two tags:
+      # Fail fast with an actionable message instead of softprops' opaque
+      # "Parameter token or opts.auth is required" when the secret is missing.
+      - name: Require DIST_REPO_TOKEN
+        env:
+          DIST_REPO_TOKEN: ${{ secrets.DIST_REPO_TOKEN }}
+        run: |
+          if [ -z "${DIST_REPO_TOKEN}" ]; then
+            echo "::error::DIST_REPO_TOKEN secret is empty on gastonmorixe/obscura."
+            echo "Create a fine-grained PAT with Contents: write on ${DIST_REPO},"
+            echo "then: gh secret set DIST_REPO_TOKEN --repo gastonmorixe/obscura"
+            exit 1
+          fi
+
+      # Publish to the PRIVATE dist repo under two tags:
       #   - build-<epoch> : immutable, pin-able
-      #   - latest        : rolling pointer the plugin's default URL uses
-      - name: Publish build-<epoch> release to public dist repo
+      #   - latest        : rolling pointer ma-fetch resolves at setup()
+      - name: Publish build-<epoch> release to dist repo
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.DIST_REPO_TOKEN }}
@@ -152,7 +164,7 @@ jobs:
             Epoch: ${{ needs.epoch.outputs.epoch }}
           files: dist/*
 
-      - name: Update rolling 'latest' release to public dist repo
+      - name: Update rolling 'latest' release to dist repo
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.DIST_REPO_TOKEN }}
