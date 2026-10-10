@@ -12210,22 +12210,24 @@ globalThis.sessionStorage = _mkSessionStore();
 const _lsCore = Object.create(Storage.prototype);
 Object.defineProperties(_lsCore, {
   getItem: { value: function(k) {
-    return JSON.parse(Deno.core.ops.op_localstorage_get_item(String(k)));
+    // Use the captured core handoff — upstream strips globalThis.Deno after
+    // bootstrap, so Deno.core.ops is gone by the time page scripts run.
+    return JSON.parse(__obscuraCore.ops.op_localstorage_get_item(String(k)));
   }, writable: false, configurable: false, enumerable: false },
   setItem: { value: function(k, v) {
-    Deno.core.ops.op_localstorage_set_item(String(k), String(v));
+    __obscuraCore.ops.op_localstorage_set_item(String(k), String(v));
   }, writable: false, configurable: false, enumerable: false },
   removeItem: { value: function(k) {
-    Deno.core.ops.op_localstorage_remove_item(String(k));
+    __obscuraCore.ops.op_localstorage_remove_item(String(k));
   }, writable: false, configurable: false, enumerable: false },
   clear: { value: function() {
-    Deno.core.ops.op_localstorage_clear();
+    __obscuraCore.ops.op_localstorage_clear();
   }, writable: false, configurable: false, enumerable: false },
   key: { value: function(i) {
-    return JSON.parse(Deno.core.ops.op_localstorage_key(Number(i) | 0));
+    return JSON.parse(__obscuraCore.ops.op_localstorage_key(Number(i) | 0));
   }, writable: false, configurable: false, enumerable: false },
   length: { get: function() {
-    return Deno.core.ops.op_localstorage_length();
+    return __obscuraCore.ops.op_localstorage_length();
   }, configurable: false, enumerable: false },
 });
 
