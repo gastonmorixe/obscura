@@ -317,6 +317,19 @@ jobs:
           shared-key: obscura-ci-dependencies
           save-if: false
 
+      # Merge-head copy of CI scripts for the first upgrade PR whose base tip
+      # predates scripts/ci/perf_smoke.py + compare_obstacle.py. Unused once
+      # those files exist on gm/private (Build base revision prefers BASE_SHA).
+      - name: Checkout merge head CI scripts bootstrap
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          path: .ci-pr-scripts
+          sparse-checkout: |
+            scripts/ci
+          sparse-checkout-cone-mode: true
+          persist-credentials: false
+
       - name: Build base revision
         shell: bash
         env:
@@ -325,8 +338,18 @@ jobs:
           set -euo pipefail
           script_root="$RUNNER_TEMP/obscura-ci-scripts"
           mkdir -p "$script_root"
-          git show "$BASE_SHA:scripts/ci/perf_smoke.py" > "$script_root/perf_smoke.py"
-          git show "$BASE_SHA:scripts/ci/compare_obstacle.py" > "$script_root/compare_obstacle.py"
+          # Prefer trusted base scripts so a PR cannot rewrite the comparator.
+          # Private gm/private historically lacked these files; fall back to the
+          # merge-head checkout once so the first upgrade PR can land them.
+          if git cat-file -e "$BASE_SHA:scripts/ci/perf_smoke.py" 2>/dev/null \
+            && git cat-file -e "$BASE_SHA:scripts/ci/compare_obstacle.py" 2>/dev/null; then
+            git show "$BASE_SHA:scripts/ci/perf_smoke.py" > "$script_root/perf_smoke.py"
+            git show "$BASE_SHA:scripts/ci/compare_obstacle.py" > "$script_root/compare_obstacle.py"
+          else
+            echo "::warning::base tip lacks perf scripts; bootstrapping from merge head $GITHUB_SHA"
+            install -m 0644 .ci-pr-scripts/scripts/ci/perf_smoke.py "$script_root/perf_smoke.py"
+            install -m 0644 .ci-pr-scripts/scripts/ci/compare_obstacle.py "$script_root/compare_obstacle.py"
+          fi
           # Checkout and cache metadata both belong to the trusted base. Build
           # in the restored target directory, not a separate empty worktree.
           cargo build --release -p obscura-cli --bins --features render
