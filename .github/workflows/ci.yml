@@ -52,16 +52,30 @@ jobs:
           fi
           git cat-file -e "${base_sha}^{commit}"
 
+          # Prefer the base tip so a PR cannot rewrite Policy against itself.
+          # Private gm/private historically lacked these files; fall back to the
+          # merge head once so the first upgrade PR can land them. After that
+          # merge, base always has the files and this fallback is inert.
+          policy_sha="$base_sha"
+          if ! git cat-file -e "$base_sha:scripts/ci/pr_policy.py" 2>/dev/null \
+            || ! git cat-file -e "$base_sha:deny.toml" 2>/dev/null; then
+            echo "::warning::base tip lacks PR policy files; bootstrapping from merge head $GITHUB_SHA"
+            policy_sha="$GITHUB_SHA"
+            git cat-file -e "$policy_sha:scripts/ci/pr_policy.py"
+            git cat-file -e "$policy_sha:deny.toml"
+          fi
+
           policy_root="$RUNNER_TEMP/obscura-policy"
           mkdir -p "$policy_root"
-          git show "$base_sha:scripts/ci/pr_policy.py" > "$policy_root/pr_policy.py"
-          git show "$base_sha:deny.toml" > "$policy_root/deny.toml"
+          git show "$policy_sha:scripts/ci/pr_policy.py" > "$policy_root/pr_policy.py"
+          git show "$policy_sha:deny.toml" > "$policy_root/deny.toml"
 
           # Container actions can only read paths mounted below the workspace.
           # Replace any PR-supplied file before exposing the trusted config.
           trusted_deny="$GITHUB_WORKSPACE/.github/.trusted-deny.toml"
           rm -f -- "$trusted_deny"
           install -m 0644 "$policy_root/deny.toml" "$trusted_deny"
+          # Keep BASE_SHA as the PR base for change classification / cargo deny.
           printf 'sha=%s\n' "$base_sha" >> "$GITHUB_OUTPUT"
           printf 'policy=%s\n' "$policy_root/pr_policy.py" >> "$GITHUB_OUTPUT"
 
