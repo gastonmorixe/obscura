@@ -5,6 +5,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         perl \
         make \
+        clang \
+        cmake \
+        libclang-dev \
+        libssl-dev \
+        llvm-dev \
+        pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -13,31 +19,34 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY vendor/ vendor/
 COPY crates/obscura-dom/Cargo.toml       crates/obscura-dom/Cargo.toml
+COPY crates/obscura-ssrf/Cargo.toml      crates/obscura-ssrf/Cargo.toml
 COPY crates/obscura-net/Cargo.toml       crates/obscura-net/Cargo.toml
 COPY crates/obscura-browser/Cargo.toml   crates/obscura-browser/Cargo.toml
 COPY crates/obscura-cdp/Cargo.toml       crates/obscura-cdp/Cargo.toml
 COPY crates/obscura-js/Cargo.toml        crates/obscura-js/Cargo.toml
 COPY crates/obscura-mcp/Cargo.toml       crates/obscura-mcp/Cargo.toml
 COPY crates/obscura-render/Cargo.toml    crates/obscura-render/Cargo.toml
+COPY crates/obscura-ext/Cargo.toml       crates/obscura-ext/Cargo.toml
 COPY crates/obscura-cli/Cargo.toml       crates/obscura-cli/Cargo.toml
 COPY crates/obscura/Cargo.toml           crates/obscura/Cargo.toml
 
 # Create stub src files so cargo can resolve the dependency graph
-RUN for crate in obscura-dom obscura-net obscura-browser obscura-cdp obscura-js obscura-mcp obscura-render obscura; do \
+RUN for crate in obscura-dom obscura-ssrf obscura-net obscura-browser obscura-cdp obscura-js obscura-mcp obscura-render obscura-ext obscura; do \
         mkdir -p crates/$crate/src && echo "// stub" > crates/$crate/src/lib.rs; \
     done && \
     mkdir -p crates/obscura-cli/src && \
     echo "fn main() {}" > crates/obscura-cli/src/main.rs && \
     echo "fn main() {}" > crates/obscura-cli/src/worker.rs
 
-RUN cargo build --release --features render --bin obscura --bin obscura-worker 2>/dev/null || true
+# Warm the dependency cache. Stub sources may fail compile; that is expected.
+RUN cargo build --release --features render,stealth --bin obscura --bin obscura-worker 2>/dev/null || true
 
 ARG OBSCURA_VERSION
 
-# Copy real sources and build
+# Copy real sources and build (render+stealth: private fork contract)
 COPY crates/ crates/
 RUN echo "Building Obscura version ${OBSCURA_VERSION:-from Cargo.toml}" && \
-    touch crates/*/src/*.rs && cargo build --release --features render --bin obscura --bin obscura-worker
+    touch crates/*/src/*.rs && cargo build --release --features render,stealth --bin obscura --bin obscura-worker
 
 # ---
 

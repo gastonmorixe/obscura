@@ -9,10 +9,10 @@ name: Dist Release (public binaries)
 # newer build sorts above an older one by filename alone, letting the plugin
 # compare versions WITHOUT executing the binary.
 #
-# Trigger: every push to the private gm/private branch (continuous fresh
-# builds), plus manual dispatch. The dist release is updated in place under a
-# rolling `latest` tag AND a unique `build-<epoch>` tag for pinning. ma-fetch
-# resolves `latest` at setup() time (no hardcoded pin).
+# Trigger: every push to gm/private or the active upgrade branch (continuous
+# fresh builds), plus manual dispatch. The dist release is updated in place
+# under a rolling `latest` tag AND a unique `build-<epoch>` tag for pinning.
+# ma-fetch resolves `latest` at setup() time (no hardcoded pin).
 #
 # Required secret: DIST_REPO_TOKEN, a fine-grained PAT with `contents: write`
 # on the dist repo (gastonmorixe/obscura-dist). Set DIST_REPO to override the
@@ -20,7 +20,7 @@ name: Dist Release (public binaries)
 
 on:
   push:
-    branches: [gm/private]
+    branches: [gm/private, gm/private-upgrade-20261010]
   workflow_dispatch:
 
 permissions:
@@ -72,12 +72,27 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # Build WITH the stealth feature. The ma-fetch backend always passes
-      # --stealth, so the shipped binary MUST support it. This is a hard build
-      # (no continue-on-error): a stealth build failure fails the job rather
-      # than silently shipping a non-stealth binary.
-      - name: Build (stealth)
-        run: cargo build --release --locked --target ${{ matrix.target }} --features stealth
+      - name: Install stealth build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang libclang-dev llvm-dev pkg-config
+
+      - name: Configure libclang (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          XCODE_PATH="$(xcode-select -p)"
+          SDK_PATH="$(xcrun --show-sdk-path)"
+          echo "SDKROOT=$SDK_PATH" >> "$GITHUB_ENV"
+          echo "CXXFLAGS=-isystem $SDK_PATH/usr/include/c++/v1" >> "$GITHUB_ENV"
+          echo "LIBCLANG_PATH=$XCODE_PATH/Toolchains/XcodeDefault.xctoolchain/usr/lib" >> "$GITHUB_ENV"
+
+      # Build WITH render+stealth. The ma-fetch backend always passes --stealth,
+      # and private consumers also need screenshots/PDF/AX paint. Hard build:
+      # failure fails the job rather than shipping a thinner binary.
+      - name: Build (render,stealth)
+        run: cargo build --release --locked --target ${{ matrix.target }} --features render,stealth
 
       - name: Package
         id: pkg

@@ -7413,13 +7413,13 @@ globalThis.ContentIndex = class ContentIndex {};
 
 function _chromeMajor() {
   var m = (globalThis.__obscura_ua || '').match(/Chrome\/(\d+)/);
-  return m ? (m[1] | 0) : 145;
+  return m ? (m[1] | 0) : 148;
 }
 // Chromium derives the sec-ch-ua GREASE brand, version, and brand order
 // deterministically from the Chrome major version
 // (components/embedder_support/user_agent_utils.cc). Replicating it keeps
 // sec-ch-ua and userAgentData exact for every profile version rather than
-// hardcoding one static token.
+// hardcoding one static token. Chrome 148+ drops "Google Chrome" (2-brand).
 var _GREASE_CHARS = [' ', '(', ':', '-', '.', '/', ')', ';', '=', '?', '_'];
 var _GREASE_VER = ['8', '99', '24'];
 var _BRAND_PERMS = [[0,1,2],[0,2,1],[1,0,2],[1,2,0],[2,0,1],[2,1,0]];
@@ -7429,6 +7429,9 @@ function _uaBrands() {
     brand: 'Not' + _GREASE_CHARS[seed % 11] + 'A' + _GREASE_CHARS[(seed + 1) % 11] + 'Brand',
     version: _GREASE_VER[seed % 3],
   };
+  if (seed >= 148) {
+    return [grease, {brand: 'Chromium', version: String(seed)}];
+  }
   var ordered = [
     grease,
     {brand: 'Chromium', version: String(seed)},
@@ -7450,7 +7453,7 @@ globalThis.navigator = {
   userAgentData: {
     mobile: false,
     get brands() { return _uaBrands(); },
-    get platform() { return globalThis.__obscura_ua_platform || "Windows"; },
+    get platform() { return globalThis.__obscura_ua_platform || "macOS"; },
     getHighEntropyValues(hints) {
       var brands = _uaBrands();
       return Promise.resolve({
@@ -7460,8 +7463,8 @@ globalThis.navigator = {
         fullVersionList: brands.map(function(b) { return {brand: b.brand, version: b.version + ".0.0.0"}; }),
         mobile: false,
         model: "",
-        platform: globalThis.__obscura_ua_platform || "Windows",
-        platformVersion: globalThis.__obscura_ua_platform_version || "15.0.0",
+        platform: globalThis.__obscura_ua_platform || "macOS",
+        platformVersion: globalThis.__obscura_ua_platform_version || "14.6.0",
         uaFullVersion: _chromeMajor() + ".0.0.0",
         wow64: false,
       });
@@ -7549,16 +7552,16 @@ globalThis.navigator = {
   defGetter('webdriver', function() { return false; });
   defGetter('userAgent', function() {
     return globalThis.__obscura_ua ||
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-      "(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36";
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+      "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
   });
   defGetter('appVersion', function() {
     return (globalThis.__obscura_ua ||
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-      "(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36").replace('Mozilla/', '');
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+      "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36").replace('Mozilla/', '');
   });
   defGetter('platform', function() {
-    return globalThis.__obscura_platform || "Win32";
+    return globalThis.__obscura_platform || "MacIntel";
   });
   defGetter('language', function() { return globalThis.__obscura_language || "en-US"; });
   defGetter('languages', function() {

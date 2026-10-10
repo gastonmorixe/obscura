@@ -10,6 +10,7 @@ Top-level flags apply to every subcommand.
     --obey-robots            Respect robots.txt
     --user-agent <UA>        Override the User-Agent
     --storage-dir <DIR>      Persistent cookies and localStorage
+    --extension <PATH>       Load a WebExtension (dir / .zip / .xpi / .crx; first wins)
     --allow-private-network  Permit loopback / RFC1918 / link-local
     --v8-flags <FLAGS>       Raw V8 flags, applied at startup
 -h, --help                   Help

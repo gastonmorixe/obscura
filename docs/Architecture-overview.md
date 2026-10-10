@@ -1,12 +1,14 @@
-Obscura is a workspace of nine crates.
+Obscura is a workspace of eleven crates.
 
 ```
 obscura-cli       CLI entry point. fetch, serve, scrape, mcp.
 obscura-cdp       Chrome DevTools Protocol server. WebSocket, dispatch, domain handlers.
-obscura-browser   Page type, navigation, lifecycle events.
+obscura-browser   Page type, navigation, lifecycle events, extension header hooks.
 obscura-js        V8 runtime via deno_core. bootstrap.js + Rust ops.
 obscura-dom       DOM tree implementation.
-obscura-net       HTTP client, stealth client, cookie jar, robots cache, tracker blocklist.
+obscura-ssrf      Shared SSRF / private-network URL and DNS guards.
+obscura-net       HTTP client, stealth client, cookie jar, LocalStorageStore, robots, trackers.
+obscura-ext       WebExtension host (manifest, bundle, DNR, chrome_shim).
 obscura-mcp       Model Context Protocol server.
 obscura-render    CSS cascade, retained layout, text shaping, and CPU paint.
 obscura           Embeddable Rust library API (Browser, Page, Element, CookieStore).

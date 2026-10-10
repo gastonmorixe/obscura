@@ -214,8 +214,8 @@ impl StealthHttpClient {
     }
 
     // Port of private gm/private stealth intent onto main's wreq-util API:
-    // freshest Chrome profile + macOS platform, then header overrides in
-    // fetch() for Chrome 148 version identity (sec-ch-ua + UA).
+    // Chrome 148 profile + macOS platform. Header overrides in fetch() keep
+    // sec-ch-ua / UA on the same Chrome 148 macOS identity (2-brand GREASE).
     // accept-encoding is left to the emulation (emulation-compression feature
     // in Cargo.toml) so wire order stays Chrome-correct and bodies still
     // decompress. Do NOT add cache-control/pragma (DataDome fingerprint).
@@ -226,7 +226,7 @@ impl StealthHttpClient {
         allow_private_network: bool,
     ) -> Self {
         let emulation_opts = wreq_util::Emulation::builder()
-            .profile(wreq_util::Profile::Chrome145)
+            .profile(wreq_util::Profile::Chrome148)
             .platform(wreq_util::Platform::MacOS)
             .build();
 
