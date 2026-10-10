@@ -352,7 +352,15 @@ jobs:
           fi
           # Checkout and cache metadata both belong to the trusted base. Build
           # in the restored target directory, not a separate empty worktree.
-          cargo build --release -p obscura-cli --bins --features render
+          # Private gm/private tips predate the render feature gate; fall back
+          # so the first upgrade PR can still produce an obscura-base binary.
+          if git show "$BASE_SHA:crates/obscura-cli/Cargo.toml" \
+            | grep -qE '^render[[:space:]]*='; then
+            cargo build --release -p obscura-cli --bins --features render
+          else
+            echo "::warning::base tip lacks render feature; building without it"
+            cargo build --release -p obscura-cli --bins
+          fi
           install -D -m 0755 \
             target/release/obscura \
             "$RUNNER_TEMP/obscura-ci/obscura-base"
