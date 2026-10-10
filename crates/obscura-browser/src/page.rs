@@ -3149,10 +3149,13 @@ impl Page {
             // document's load-event delay set, including scripts inserted by
             // a DOMContentLoaded listener.
             js.record_navigation_timing("domContentLoadedEventStart");
-            let completed = js.execute_script_guarded(
+            // with_timeout (not guarded): termination must stay Err so EventEnd
+            // is not stamped. guarded maps kill -> Ok for preload callers.
+            let completed = js.execute_script_with_timeout(
                 "<dom-content-loaded>",
                 "try { document.dispatchEvent(new Event('DOMContentLoaded', {bubbles:false,cancelable:false})); } catch(e) {}\n\
                  try { window.dispatchEvent(new Event('DOMContentLoaded', {bubbles:false,cancelable:false})); } catch(e) {}",
+                std::time::Duration::from_secs(5),
             );
             if completed.is_ok() {
                 js.record_navigation_timing("domContentLoadedEventEnd");
@@ -3171,13 +3174,14 @@ impl Page {
             // remains pending until an explicit caller settle/wait.
             js.record_navigation_timing("domComplete");
             js.record_navigation_timing("loadEventStart");
-            let completed = js.execute_script_guarded(
+            let completed = js.execute_script_with_timeout(
                 "<load-event>",
                 "globalThis.__documentReadyState__ = 'complete';\n\
                  try {\n\
                    const loadEvent = new Event('load', {bubbles:false,cancelable:false});\n\
                    try { window.dispatchEvent(loadEvent); } catch(e) {}\n\
                  } catch(e) {}",
+                std::time::Duration::from_secs(5),
             );
             if completed.is_ok() {
                 js.record_navigation_timing("loadEventEnd");

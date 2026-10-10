@@ -117,55 +117,6 @@ fn build_ax_nodes_with_styles(
     nodes
 }
 
-#[cfg(test)]
-mod tests {
-    use super::build_ax_nodes;
-    use obscura_dom::parse_html;
-
-    #[test]
-    fn full_tree_uses_dom_scoped_ids_and_synthetic_bounds() {
-        let dom = parse_html(
-            r#"<!doctype html><html><body><button aria-label="Save">ignored</button></body></html>"#,
-        );
-        let nodes = build_ax_nodes(&dom);
-        let button = nodes
-            .iter()
-            .find(|node| node["role"]["value"] == "button")
-            .expect("button AX node");
-
-        let backend_id = button["backendDOMNodeId"].as_u64().unwrap();
-        assert_eq!(button["nodeId"], format!("ax-{backend_id}"));
-        assert_eq!(button["name"]["value"], "Save");
-        assert_eq!(button["bounds"]["synthetic"], true);
-        assert_eq!(button["bounds"]["height"], 24);
-    }
-
-    #[test]
-    fn ids_of_existing_nodes_survive_unrelated_append() {
-        let dom = parse_html(r#"<html><body><button id="save">Save</button></body></html>"#);
-        let before = build_ax_nodes(&dom);
-        let before_id = before
-            .iter()
-            .find(|node| node["role"]["value"] == "button")
-            .and_then(|node| node["nodeId"].as_str())
-            .unwrap()
-            .to_string();
-
-        // Rebuilding with an unrelated later sibling gives the existing nodes
-        // the same DOM ids; AX ids therefore remain stable as well.
-        let rebuilt = parse_html(
-            r#"<html><body><button id="save">Save</button><div>later</div></body></html>"#,
-        );
-        let after = build_ax_nodes(&rebuilt);
-        let after_id = after
-            .iter()
-            .find(|node| node["role"]["value"] == "button")
-            .and_then(|node| node["nodeId"].as_str())
-            .unwrap();
-
-        assert_eq!(before_id, after_id);
-    }
-}
 
 fn build_ax_node(
     dom: &DomTree,
@@ -999,5 +950,49 @@ mod tests {
         assert_ax_value(&nodes, &dom, "invalid-disabled", None);
         assert_ax_value(&nodes, &dom, "reenabled", Some("reenabled child"));
         assert_ax_value(&nodes, &dom, "reenabled-child", None);
+    }
+
+    #[test]
+    fn full_tree_uses_dom_scoped_ids_and_synthetic_bounds() {
+        let dom = parse_html(
+            r#"<!doctype html><html><body><button aria-label="Save">ignored</button></body></html>"#,
+        );
+        let nodes = build_ax_nodes(&dom);
+        let button = nodes
+            .iter()
+            .find(|node| node["role"]["value"] == "button")
+            .expect("button AX node");
+
+        let backend_id = button["backendDOMNodeId"].as_u64().unwrap();
+        assert_eq!(button["nodeId"], format!("ax-{backend_id}"));
+        assert_eq!(button["name"]["value"], "Save");
+        assert_eq!(button["bounds"]["synthetic"], true);
+        assert_eq!(button["bounds"]["height"], 24);
+    }
+
+    #[test]
+    fn ids_of_existing_nodes_survive_unrelated_append() {
+        let dom = parse_html(r#"<html><body><button id="save">Save</button></body></html>"#);
+        let before = build_ax_nodes(&dom);
+        let before_id = before
+            .iter()
+            .find(|node| node["role"]["value"] == "button")
+            .and_then(|node| node["nodeId"].as_str())
+            .unwrap()
+            .to_string();
+
+        // Rebuilding with an unrelated later sibling gives the existing nodes
+        // the same DOM ids; AX ids therefore remain stable as well.
+        let rebuilt = parse_html(
+            r#"<html><body><button id="save">Save</button><div>later</div></body></html>"#,
+        );
+        let after = build_ax_nodes(&rebuilt);
+        let after_id = after
+            .iter()
+            .find(|node| node["role"]["value"] == "button")
+            .and_then(|node| node["nodeId"].as_str())
+            .unwrap();
+
+        assert_eq!(before_id, after_id);
     }
 }

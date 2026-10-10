@@ -53,6 +53,7 @@ integration_tests!(
     runtime_get_properties_objectid_escaping,
     runtime_primitives,
     scroll_event_on_assignment,
+    session_persistence,
     structured_clone_crypto_parity,
     textarea_enter_selection,
     treewalker_document_order,

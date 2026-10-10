@@ -3295,11 +3295,17 @@ impl ObscuraJsRuntime {
         // long-standing false-economy (skipping the watchdog to save the
         // thread spawn) that left the unguarded path open to wedges in
         // user-script callback graphs (load handlers, microtask reactions).
-        // The kill mechanism (`isolate_handle.terminate_execution()`) plus
-        // the post-kill `<reset>` script in `execute_script_with_timeout`
-        // returns `Ok(())` for terminated scripts, so callers see the same
-        // contract whether the script ran to completion or got killed.
-        self.execute_script_with_timeout(name, source, std::time::Duration::from_secs(5))
+        // Preload / extension callers treat Ok as "ran or was killed cleanly".
+        // Lifecycle timing (DOMContentLoaded/load EventEnd) must see Err on
+        // terminate, so those paths call `execute_script_with_timeout` directly.
+        match self.execute_script_with_timeout(name, source, std::time::Duration::from_secs(5)) {
+            Ok(()) => Ok(()),
+            Err(msg) if msg.contains("Uncaught Error: execution terminated") => {
+                tracing::warn!("Script killed after 5s timeout");
+                Ok(())
+            }
+            Err(msg) => Err(msg),
+        }
     }
 
     pub fn execute_script_with_timeout(
@@ -3321,10 +3327,8 @@ impl ObscuraJsRuntime {
             Err(msg) => {
                 if msg.contains("Uncaught Error: execution terminated") {
                     tracing::warn!("Script killed after {}s timeout", timeout.as_secs());
-                    Ok(())
-                } else {
-                    Err(msg)
                 }
+                Err(msg)
             }
         }
     }
@@ -9718,11 +9722,15 @@ mod tests {
         let cancelled = rt.arm_watchdog(std::time::Duration::from_secs(30));
         drop(cancelled);
         // An independent backstop keeps a broken slot implementation bounded.
-        rt.execute_script_with_timeout(
+        let killed = rt.execute_script_with_timeout(
             "overlapping-deadlines",
             "while (true) {}",
             std::time::Duration::from_secs(2),
-        ).unwrap();
+        ).unwrap_err();
+        assert!(
+            killed.contains("execution terminated"),
+            "overlapping deadline kill must surface termination: {killed}"
+        );
         assert!(rt.disarm_watchdog(deadline));
         assert_eq!(rt.evaluate("1 + 1").unwrap(), serde_json::json!(2.0));
     }
@@ -23258,12 +23266,16 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn timed_out_classic_script_leaves_runtime_reusable() {
         let mut rt = ObscuraJsRuntime::new();
-        rt.execute_script_with_timeout(
+        let killed = rt.execute_script_with_timeout(
             "https://example.test/hang.js",
             "while (true) {}",
             std::time::Duration::from_millis(20),
         )
-        .unwrap();
+        .unwrap_err();
+        assert!(
+            killed.contains("execution terminated"),
+            "timed-out classic script must surface termination: {killed}"
+        );
         rt.execute_script(
             "https://example.test/after-timeout.js",
             "globalThis.__after_timeout = true;",
