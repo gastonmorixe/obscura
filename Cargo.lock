@@ -2056,7 +2056,7 @@ dependencies = [
 
 [[package]]
 name = "obscura"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "obscura-browser",
@@ -2070,7 +2070,7 @@ dependencies = [
 
 [[package]]
 name = "obscura-browser"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2090,7 +2090,7 @@ dependencies = [
 
 [[package]]
 name = "obscura-cdp"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2117,7 +2117,7 @@ dependencies = [
 
 [[package]]
 name = "obscura-cli"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -2140,7 +2140,7 @@ dependencies = [
 
 [[package]]
 name = "obscura-dom"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "cssparser",
  "html5ever",
@@ -2154,7 +2154,7 @@ dependencies = [
 
 [[package]]
 name = "obscura-ext"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "once_cell",
@@ -2170,7 +2170,7 @@ dependencies = [
 
 [[package]]
 name = "obscura-js"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2202,7 +2202,7 @@ dependencies = [
 
 [[package]]
 name = "obscura-mcp"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2218,7 +2218,7 @@ dependencies = [
 
 [[package]]
 name = "obscura-net"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "encoding_rs",
@@ -2242,7 +2242,7 @@ dependencies = [
 
 [[package]]
 name = "obscura-render"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "ab_glyph",
  "base64 0.22.1",
@@ -2264,7 +2264,7 @@ dependencies = [
 
 [[package]]
 name = "obscura-ssrf"
-version = "0.1.0"
+version = "0.2.4"
 
 [[package]]
 name = "once_cell"
