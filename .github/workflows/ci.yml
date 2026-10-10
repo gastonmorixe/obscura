@@ -187,6 +187,22 @@ jobs:
           path: obscura-benchmark
           persist-credentials: false
 
+      # Private Chrome 148 macOS contract defaults navigator.platform to MacIntel.
+      # Upstream pin still expects Win32; no push access on obscura-benchmark.
+      - name: Align fingerprint expect with MacIntel default
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("obscura-benchmark/obstacle-course/manifest.json")
+          text = path.read_text(encoding="utf-8")
+          old = "fp:chrome=1:wdclean=1:plat=Win32:lang=en-US:tz=Europe/Berlin"
+          new = "fp:chrome=1:wdclean=1:plat=MacIntel:lang=en-US:tz=Europe/Berlin"
+          if old not in text:
+              raise SystemExit(f"fingerprint Win32 expect not found in {path}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          print(f"updated fingerprint expect: Win32 -> MacIntel in {path}")
+          PY
+
       - name: Require all 33 obstacle stages
         run: |
           OBSCURA_BIN="$RUNNER_TEMP/obscura-ci/obscura-pr" \
@@ -264,6 +280,21 @@ jobs:
           ref: 2d08d9a8e860e423b47209434a9fba9c75e6eee6
           path: obscura-benchmark
           persist-credentials: false
+
+      # Same MacIntel fingerprint expect alignment as Core (see above).
+      - name: Align fingerprint expect with MacIntel default
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("obscura-benchmark/obstacle-course/manifest.json")
+          text = path.read_text(encoding="utf-8")
+          old = "fp:chrome=1:wdclean=1:plat=Win32:lang=en-US:tz=Europe/Berlin"
+          new = "fp:chrome=1:wdclean=1:plat=MacIntel:lang=en-US:tz=Europe/Berlin"
+          if old not in text:
+              raise SystemExit(f"fingerprint Win32 expect not found in {path}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          print(f"updated fingerprint expect: Win32 -> MacIntel in {path}")
+          PY
 
       - name: Download candidate binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
