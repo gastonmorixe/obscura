@@ -26,5 +26,5 @@ base64 = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"], optional = true }
 
 [dev-dependencies]
-tempdir = "0.3"
+tempfile = "3"
 tokio = { workspace = true, features = ["test-util"] }

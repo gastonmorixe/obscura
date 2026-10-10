@@ -2,6 +2,8 @@
 name = "obscura-ext"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 serde = { workspace = true }
@@ -17,4 +19,4 @@ once_cell = "1"
 [dev-dependencies]
 # Synth-bundle tests need write access to a zip stream + a scratch dir.
 zip = { version = "2", default-features = false, features = ["deflate"] }
-tempdir = "0.3"
+tempfile = "3"
