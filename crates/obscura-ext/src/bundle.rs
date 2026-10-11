@@ -278,8 +278,8 @@ mod tests {
 
     /// Write a synth bundle to a tempfile and return its path. The
     /// caller's responsibility to keep the temp dir alive.
-    fn write_synth_zip(suffix: &str) -> (tempdir::TempDir, std::path::PathBuf) {
-        let dir = tempdir::TempDir::new("obscura-ext-test").unwrap();
+    fn write_synth_zip(suffix: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::Builder::new().prefix("obscura-ext-test").tempdir().unwrap();
         let path = dir.path().join(format!("synth.{suffix}"));
         std::fs::write(&path, synth_zip_bytes()).unwrap();
         (dir, path)
@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn loads_synth_unpacked_directory() {
-        let dir = tempdir::TempDir::new("obscura-ext-test").unwrap();
+        let dir = tempfile::Builder::new().prefix("obscura-ext-test").tempdir().unwrap();
         std::fs::write(
             dir.path().join("manifest.json"),
             r#"{ "manifest_version": 2, "name": "Synth", "version": "1.0",
@@ -348,7 +348,7 @@ mod tests {
         crx.extend_from_slice(header);
         crx.extend_from_slice(&zip_bytes);
 
-        let dir = tempdir::TempDir::new("obscura-ext-test").unwrap();
+        let dir = tempfile::Builder::new().prefix("obscura-ext-test").tempdir().unwrap();
         let path = dir.path().join("synth.crx");
         std::fs::write(&path, &crx).unwrap();
         let bundle = Bundle::load(&path).expect("crx load");
@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn rejects_unknown_extension() {
-        let dir = tempdir::TempDir::new("obscura-ext-test").unwrap();
+        let dir = tempfile::Builder::new().prefix("obscura-ext-test").tempdir().unwrap();
         let path = dir.path().join("synth.tar.gz");
         std::fs::write(&path, b"not a zip").unwrap();
         assert!(matches!(
@@ -416,7 +416,7 @@ mod tests {
             buf.into_inner()
         }
 
-        let dir = tempdir::TempDir::new("obscura-ext-test").unwrap();
+        let dir = tempfile::Builder::new().prefix("obscura-ext-test").tempdir().unwrap();
         let path = dir.path().join("multi.xpi");
         std::fs::write(&path, build()).unwrap();
 

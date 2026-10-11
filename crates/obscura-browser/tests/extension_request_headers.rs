@@ -70,7 +70,7 @@ fn runtime_from_dir(dir: &std::path::Path) -> Arc<ExtensionRuntime> {
 
 #[tokio::test(flavor = "current_thread")]
 async fn resolves_referer_for_in_scope_wsj_url() {
-    let tmp = tempdir::TempDir::new("obscura-reqhdr-test").unwrap();
+    let tmp = tempfile::Builder::new().prefix("obscura-reqhdr-test").tempdir().unwrap();
     build_paywall_ext(tmp.path());
     let ext = runtime_from_dir(tmp.path());
 
@@ -101,7 +101,7 @@ async fn resolves_referer_for_in_scope_wsj_url() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn no_headers_for_out_of_scope_url() {
-    let tmp = tempdir::TempDir::new("obscura-reqhdr-test2").unwrap();
+    let tmp = tempfile::Builder::new().prefix("obscura-reqhdr-test2").tempdir().unwrap();
     build_paywall_ext(tmp.path());
     let ext = runtime_from_dir(tmp.path());
 

@@ -7,6 +7,10 @@ under *Unreleased* land in the next tag.
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-10
+
+Private-line release aligned with upstream tag `v0.2.4` / `upstream/main` @ `73299d5`, while keeping WebExtension, localStorage, stealth Chrome 148, fetch-worker, and dist CI.
+
 ### Added
 
 - **Persistent Fetch worker protocol.** `obscura-worker --fetch-protocol`
@@ -68,6 +72,7 @@ under *Unreleased* land in the next tag.
 
 ### Changed
 
+- **Absorbed upstream `main` through `73299d5`.** Package version aligned to `0.2.4` (matches upstream tag `v0.2.4`). Private stealth identity, WebExtension host, localStorage persistence, fetch-worker AX dumps, and `obscura-dist` CI are preserved across the merge.
 - **Dynamic classic scripts now load concurrently.** JavaScript-created
   classic `<script src>` elements no longer share the serialized ES-module
   import queue. This removes a large webpack chunk bottleneck observed on X:

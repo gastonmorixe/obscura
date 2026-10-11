@@ -331,7 +331,7 @@ mod tests {
     use super::*;
 
     fn runtime_for(host_pattern: &str) -> ExtensionRuntime {
-        let dir = tempdir::TempDir::new("obscura-ext-rt-test").unwrap();
+        let dir = tempfile::Builder::new().prefix("obscura-ext-rt-test").tempdir().unwrap();
         std::fs::write(
             dir.path().join("manifest.json"),
             format!(
