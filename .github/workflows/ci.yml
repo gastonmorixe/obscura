@@ -331,6 +331,7 @@ jobs:
           persist-credentials: false
 
       - name: Build base revision
+        id: build-base
         shell: bash
         env:
           BASE_SHA: ${{ needs.policy.outputs.base-sha }}
@@ -338,6 +339,7 @@ jobs:
           set -euo pipefail
           script_root="$RUNNER_TEMP/obscura-ci-scripts"
           mkdir -p "$script_root"
+          comparable=true
           # Prefer trusted base scripts so a PR cannot rewrite the comparator.
           # Private gm/private historically lacked these files; fall back to the
           # merge-head checkout once so the first upgrade PR can land them.
@@ -349,6 +351,7 @@ jobs:
             echo "::warning::base tip lacks perf scripts; bootstrapping from merge head $GITHUB_SHA"
             install -m 0644 .ci-pr-scripts/scripts/ci/perf_smoke.py "$script_root/perf_smoke.py"
             install -m 0644 .ci-pr-scripts/scripts/ci/compare_obstacle.py "$script_root/compare_obstacle.py"
+            comparable=false
           fi
           # Checkout and cache metadata both belong to the trusted base. Build
           # in the restored target directory, not a separate empty worktree.
@@ -360,7 +363,9 @@ jobs:
           else
             echo "::warning::base tip lacks render feature; building without it"
             cargo build --release -p obscura-cli --bins
+            comparable=false
           fi
+          printf 'comparable=%s\n' "$comparable" >> "$GITHUB_OUTPUT"
           install -D -m 0755 \
             target/release/obscura \
             "$RUNNER_TEMP/obscura-ci/obscura-base"
@@ -388,16 +393,32 @@ jobs:
 
       - name: Run interleaved latency and RSS smoke benchmark
         run: |
+          set +e
           python3 "$RUNNER_TEMP/obscura-ci-scripts/perf_smoke.py" \
             --base "$RUNNER_TEMP/obscura-ci/obscura-base" \
             --candidate "$RUNNER_TEMP/obscura-ci/obscura-pr" \
             --output "$RUNNER_TEMP/obscura-ci-results/perf-smoke.json"
+          status=$?
+          set -e
+          if [[ "${{ steps.build-base.outputs.comparable }}" != "true" ]]; then
+            echo "::warning::base lacks render feature or perf scripts; perf comparison is informational only"
+            exit 0
+          fi
+          exit "$status"
 
       - name: Compare obstacle correctness and latency
         run: |
+          set +e
           python3 "$RUNNER_TEMP/obscura-ci-scripts/compare_obstacle.py" \
             --base "$RUNNER_TEMP/obscura-ci-results/obstacle-base.json" \
             --candidate "$RUNNER_TEMP/obscura-ci-results/obstacle-pr.json"
+          status=$?
+          set -e
+          if [[ "${{ steps.build-base.outputs.comparable }}" != "true" ]]; then
+            echo "::warning::base lacks render feature or perf scripts; obstacle comparison is informational only"
+            exit 0
+          fi
+          exit "$status"
 
       - name: Upload comparison evidence
         if: always()
