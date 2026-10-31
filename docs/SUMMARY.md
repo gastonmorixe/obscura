@@ -24,6 +24,10 @@
 * [Intercept and modify requests](Intercept-and-modify-requests.md)
 * [Run in production at scale](Run-in-production-at-scale.md)
 
+## Engineering notes
+
+* [Upstream sync and stealth Chrome 156](Upstream-sync-and-stealth-156.md)
+
 ## Reference
 
 * [CLI reference](CLI-reference.md)

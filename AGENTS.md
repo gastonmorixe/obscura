@@ -85,9 +85,9 @@ edit instead.
 - **obscura-js** — V8/`deno_core` runtime. `js/bootstrap.js` is the DOM/browser shim; `src/ops.rs` bridges JS to Rust DOM ops; `src/runtime.rs` owns the isolate and the per-page `ObscuraState`.
 - **obscura-dom** — DOM tree (`src/tree.rs`).
 - **obscura-ssrf** — shared SSRF / private-network URL and DNS guards used by net and fetch paths.
-- **obscura-net** — HTTP client (`client.rs`), stealth client (`wreq_client.rs`), cookie jar, robots cache, tracker blocklist. Stealth wire identity is Chrome 156 macOS (`STEALTH_*` in `wreq_client.rs`).
+- **obscura-net** — HTTP client (`client.rs`), stealth client (`wreq_client.rs`), cookie jar, robots cache, tracker blocklist. Stealth wire identity is Chrome 156 macOS (`STEALTH_*` in `wreq_client.rs`). The TLS profile stays `wreq_util::Profile::Chrome154`, the highest that crate ships, because a ClientHello carries no Chrome version. Do not lower the advertised major below 155 without retesting PerimeterX: it returns a challenge page at 154 and the article at 155 and above.
 - **obscura-browser** — the `Page` type, navigation, JS evaluation, extension header/referrer hooks.
-- **obscura-ext** — WebExtension host (manifest, bundle, DNR, `chrome_shim.js`). Wired via `BrowserContext::with_extension`.
+- **obscura-ext** — WebExtension host (manifest, bundle, DNR, `chrome_shim.js`). Wired via `BrowserContext::with_extension`. Only the top-level document runs through the header chain today, so `onBeforeRequest`, `onHeadersReceived`, and DNR blocking are recorded but never fire for subresources.
 - **obscura-render** — selector cascade, computed style, retained layout,
   scrolling, text shaping, images/SVG/canvas, and CPU-backed paint. The
   `render` feature powers geometry, screenshots, CDP screencasting, and PDF.

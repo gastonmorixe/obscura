@@ -7,7 +7,7 @@ obscura-browser   Page type, navigation, lifecycle events, extension header hook
 obscura-js        V8 runtime via deno_core. bootstrap.js + Rust ops.
 obscura-dom       DOM tree implementation.
 obscura-ssrf      Shared SSRF / private-network URL and DNS guards.
-obscura-net       HTTP client, stealth client, cookie jar, LocalStorageStore, robots, trackers.
+obscura-net       HTTP client, stealth client, cookie jar, robots, trackers.
 obscura-ext       WebExtension host (manifest, bundle, DNR, chrome_shim).
 obscura-mcp       Model Context Protocol server.
 obscura-render    CSS cascade, retained layout, text shaping, and CPU paint.

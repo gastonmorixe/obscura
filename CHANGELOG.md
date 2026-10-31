@@ -24,6 +24,36 @@ under *Unreleased* land in the next tag.
   on this machine through CDP in a fresh incognito context, and with curl
   using identical header sets that differed only in the version string.
 
+### Fixed
+
+- **AX node ids are DOM-derived again, and synthetic bounds are back.** The
+  upstream merge switched ids to an ordinal counter, which renumbers every
+  node when an earlier sibling is inserted, and dropped the `bounds` block
+  that `docs/persistent-fetch-worker-protocol.md` promises. Pinned by
+  `ax_node_ids_derive_from_dom_ids_and_bounds_are_marked_synthetic`.
+- **A pre-split `localstorage.json` is migrated on load.** Upstream reads only
+  the per-origin directory, so an upgraded profile would have started with
+  empty `localStorage` while cookies survived. The legacy file is adopted once
+  and left in place for a downgrade. Pinned by
+  `legacy_single_file_localstorage_is_migrated_on_upgrade`.
+- **The extension prepass binds the context Web Storage.** It had been reading
+  the private store that `ObscuraState` allocates by default, then dropping it
+  with the realm, so an extension that shaped a request header from
+  `localStorage` saw empty data with no error.
+
+### Added
+
+- **`docs/Upstream-sync-and-stealth-156.md`.** Working record of the upstream
+  sync, the Chrome 156 identity change, the evidence for each claim, and the
+  known limitations.
+
+### Removed
+
+- **`obscura_net::LocalStorageStore`.** Superseded by upstream's context-scoped
+  `OriginStorage`, which adds per-origin files, atomic writes, byte budgets,
+  tab-scoped `sessionStorage`, IndexedDB, and `SecurityError` on an opaque
+  origin. `docs/persistence.md` documents the new on-disk layout.
+
 ## [0.2.4] - 2026-10-10
 
 Private-line release aligned with upstream tag `v0.2.4` / `upstream/main` @ `73299d5`, while keeping WebExtension, localStorage, stealth Chrome 148, fetch-worker, and dist CI.
