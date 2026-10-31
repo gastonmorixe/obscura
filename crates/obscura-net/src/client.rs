@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, OnceLock};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use std::net::{IpAddr, SocketAddr};
@@ -696,10 +696,18 @@ pub(crate) fn validate_url(url: &Url, allow_private_network: bool) -> Result<(),
     Ok(())
 }
 
+/// The only reader of local files in the net layer. It checks the opt-in
+/// itself so a new caller cannot read `file://` by forgetting the gate.
 pub(crate) async fn fetch_file_url(
     url: &Url,
     max_response_bytes: usize,
+    allow_file_access: bool,
 ) -> Result<Response, ObscuraNetError> {
+    if !allow_file_access {
+        return Err(ObscuraNetError::Network(format!(
+            "file:// access is disabled (requires --allow-file-access): {url}"
+        )));
+    }
     let path = url
         .to_file_path()
         .map_err(|_| ObscuraNetError::Network("Invalid file URL".to_string()))?;
@@ -850,6 +858,9 @@ pub struct ObscuraHttpClient {
     /// through in addition to the `OBSCURA_ALLOW_PRIVATE_NETWORK` env var.
     /// Set via `--allow-private-network` on the CLI (issue #33).
     pub allow_private_network: bool,
+    /// Lets `fetch_file_url` read local files. Off by default. Atomic because
+    /// `BrowserContext` flips it after the client is already shared.
+    allow_file_access: AtomicBool,
 }
 
 const RESOURCE_CACHE_MAX_ENTRIES: usize = 256;
@@ -1071,7 +1082,16 @@ impl ObscuraHttpClient {
             block_trackers: false,
             resource_loader: std::sync::Mutex::new(ResourceLoaderState::default()),
             allow_private_network,
+            allow_file_access: AtomicBool::new(false),
         }
+    }
+
+    pub fn allow_file_access(&self) -> bool {
+        self.allow_file_access.load(Ordering::Relaxed)
+    }
+
+    pub fn set_allow_file_access(&self, allow: bool) {
+        self.allow_file_access.store(allow, Ordering::Relaxed);
     }
 
     async fn get_client(&self) -> &Client {
@@ -1388,11 +1408,29 @@ impl ObscuraHttpClient {
         callbacks: Option<&CallbackRegistry>,
         request: ResourceRequest,
     ) -> Result<Response, ObscuraNetError> {
+        self.fetch_request_uncached(initial_method, url, initial_body, callbacks, request, None).await
+    }
+
+    /// A navigation continued by an interceptor uses request-local overrides.
+    pub async fn fetch_navigation_request(
+        &self, url: &Url, method: &str, body: Option<Vec<u8>>,
+        headers: Option<HashMap<String, String>>, callbacks: Option<&CallbackRegistry>,
+    ) -> Result<Response, ObscuraNetError> {
+        let method = Method::from_bytes(method.as_bytes())
+            .map_err(|error| ObscuraNetError::Network(error.to_string()))?;
+        self.fetch_request_uncached(method, url, body, callbacks, ResourceRequest::navigation(), headers).await
+    }
+
+    async fn fetch_request_uncached(
+        &self, initial_method: Method, url: &Url, initial_body: Option<Vec<u8>>,
+        callbacks: Option<&CallbackRegistry>, request: ResourceRequest,
+        mut request_headers: Option<HashMap<String, String>>,
+    ) -> Result<Response, ObscuraNetError> {
         validate_url(url, self.allow_private_network)?;
         validate_request_mode(&request, url)?;
 
         if url.scheme() == "file" {
-            return fetch_file_url(url, request.max_response_bytes).await;
+            return fetch_file_url(url, request.max_response_bytes, self.allow_file_access()).await;
         }
 
         let mut method = initial_method;
@@ -1428,7 +1466,7 @@ impl ObscuraHttpClient {
             let request_info = RequestInfo {
                 url: current_url.clone(),
                 method: method.to_string(),
-                headers: self.extra_headers.read().await.clone(),
+                headers: match request_headers.as_ref() { Some(headers) => headers.clone(), None => self.extra_headers.read().await.clone() },
                 resource_type: request.resource_type.clone(),
             };
 
@@ -1552,7 +1590,9 @@ impl ObscuraHttpClient {
                 }
             }
 
-            for (k, v) in self.extra_headers.read().await.iter() {
+            let extra_headers = self.extra_headers.read().await;
+            let supplied = request_headers.as_ref();
+            for (k, v) in supplied.unwrap_or(&extra_headers).iter() {
                 if let (Ok(name), Ok(val)) = (
                     HeaderName::from_bytes(k.as_bytes()),
                     HeaderValue::from_str(v),
@@ -1570,11 +1610,13 @@ impl ObscuraHttpClient {
                 headers.remove(reqwest::header::ORIGIN);
             }
 
+            drop(extra_headers);
+            let default_form_type = method == Method::POST && !headers.contains_key(reqwest::header::CONTENT_TYPE);
             let mut req_builder = self.get_client().await.request(method.clone(), current_url.as_str())
                 .headers(headers);
 
             if let Some(ref b) = body {
-                if method == Method::POST {
+                if default_form_type {
                     req_builder = req_builder.header(
                         reqwest::header::CONTENT_TYPE,
                         "application/x-www-form-urlencoded",
@@ -1625,14 +1667,22 @@ impl ObscuraHttpClient {
                     validate_request_mode(&request, &next_url)?;
                     redirect_tainted |=
                         redirect_taints_origin(&request, &current_url, &next_url);
+                    if next_url.origin() != current_url.origin() {
+                        if let Some(headers) = request_headers.as_mut() {
+                            headers.retain(|name, _| !name.eq_ignore_ascii_case("authorization"));
+                        }
+                    }
                     redirects.push(current_url.clone());
                     current_url = next_url;
-                    if status == reqwest::StatusCode::MOVED_PERMANENTLY
-                        || status == reqwest::StatusCode::FOUND
-                        || status == reqwest::StatusCode::SEE_OTHER
+                    if ((status == reqwest::StatusCode::MOVED_PERMANENTLY || status == reqwest::StatusCode::FOUND) && method == Method::POST)
+                        || (status == reqwest::StatusCode::SEE_OTHER && method != Method::GET && method != Method::HEAD)
                     {
                         method = Method::GET;
                         body = None;
+                        if let Some(headers) = request_headers.as_mut() {
+                            headers.retain(|name, _| !matches!(name.to_ascii_lowercase().as_str(),
+                                "content-type" | "content-encoding" | "content-language" | "content-location" | "content-length"));
+                        }
                     }
                     continue;
                 }
@@ -2989,5 +3039,52 @@ mod cert_env_tests {
             None,
             Some(OsStr::new("/etc/ssl/certs"))
         ));
+    }
+}
+
+#[cfg(test)]
+mod file_access_tests {
+    use super::{fetch_file_url, ObscuraHttpClient};
+    use crate::cookies::CookieJar;
+    use std::sync::Arc;
+    use url::Url;
+
+    fn fixture() -> (tempfile::TempDir, Url) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret.html");
+        std::fs::write(&path, "local-secret").unwrap();
+        let url = Url::from_file_path(&path).unwrap();
+        (dir, url)
+    }
+
+    // The gate lives in the loader, so a caller that never checks the flag
+    // still cannot read a local file.
+    #[tokio::test]
+    async fn loader_refuses_file_urls_without_the_opt_in() {
+        let (_dir, url) = fixture();
+        let error = fetch_file_url(&url, 1024, false)
+            .await
+            .expect_err("file:// must be refused without allow_file_access")
+            .to_string();
+        assert!(error.contains("allow-file-access"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn loader_reads_file_urls_with_the_opt_in() {
+        let (_dir, url) = fixture();
+        let response = fetch_file_url(&url, 1024, true).await.expect("opted in");
+        assert_eq!(response.body, b"local-secret");
+        assert_eq!(response.headers.get("content-type").unwrap(), "text/html");
+    }
+
+    #[tokio::test]
+    async fn client_fetch_follows_its_file_access_setting() {
+        let (_dir, url) = fixture();
+        let client = ObscuraHttpClient::with_full_options(Arc::new(CookieJar::new()), None, false);
+        assert!(client.fetch(&url).await.is_err());
+        client.set_allow_file_access(true);
+        assert_eq!(client.fetch(&url).await.unwrap().body, b"local-secret");
+        client.set_allow_file_access(false);
+        assert!(client.fetch(&url).await.is_err());
     }
 }

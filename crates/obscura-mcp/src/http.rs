@@ -303,6 +303,7 @@ pub async fn run_with_storage(
     let auth_token = Arc::new(auth_token);
     let connection_slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     let (request_tx, mut request_rx) = mpsc::channel::<PendingRequest>(MAX_PENDING_REQUESTS);
+    let mut runtime_pump_armed = false;
 
     loop {
         tokio::select! {
@@ -332,6 +333,21 @@ pub async fn run_with_storage(
             Some(request) = request_rx.recv() => {
                 let response = process_body(&request.body, &mut state).await;
                 let _ = request.reply.send(response);
+                runtime_pump_armed = state.has_active_page_runtime();
+            }
+            // Disabled select branches still construct their futures; do not create a page there.
+            pump_result = async { state.page_mut().run_autonomous_event_loop_turn().await }, if runtime_pump_armed => {
+                let pump_result = match pump_result {
+                    Ok(reached_idle) => state.finish_active_page_turn(reached_idle).await,
+                    Err(error) => Err(error),
+                };
+                match pump_result {
+                    Ok(reached_idle) => runtime_pump_armed = !reached_idle,
+                    Err(error) => {
+                        runtime_pump_armed = false;
+                        tracing::warn!("MCP page task failed: {error}");
+                    }
+                }
             }
         }
     }

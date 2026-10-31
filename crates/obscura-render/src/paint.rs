@@ -162,6 +162,8 @@ struct CachedRasterPaint {
 /// Successful bytes use `Arc` so consumers never clone an image/font body.
 pub struct RenderResourceCache {
     entries: HashMap<String, CachedResource>,
+    // Cancellation belongs to the document, not the retryable byte cache.
+    stopped: HashSet<String>,
     order: VecDeque<String>,
     retained_bytes: usize,
     raster_paints: VecDeque<CachedRasterPaint>,
@@ -209,6 +211,7 @@ impl RenderResourceCache {
     ) -> Self {
         Self {
             entries: HashMap::new(),
+            stopped: HashSet::new(),
             order: VecDeque::new(),
             retained_bytes: 0,
             raster_paints: VecDeque::new(),
@@ -285,7 +288,9 @@ impl RenderResourceCache {
     }
 
     pub fn has_live_outcome(&self, url: &str) -> bool {
-        match self.entries.get(&network_resource_url(url)) {
+        let key = network_resource_url(url);
+        if self.stopped.contains(&key) { return true; }
+        match self.entries.get(&key) {
             Some(CachedResource::Bytes { .. }) => true,
             Some(CachedResource::Missing(at)) => at.elapsed() < MISSING_RESOURCE_RETRY_AFTER,
             None => false,
@@ -336,8 +341,20 @@ impl RenderResourceCache {
     /// Seed already-shared bytes without copying a complete response body.
     pub fn seed_shared(&mut self, url: String, bytes: Arc<[u8]>) {
         let url = network_resource_url(&url);
+        self.stopped.remove(&url);
         self.remove(&url);
         self.insert_bytes(url, bytes);
+    }
+
+    /// Keep a canceled request stopped until this document's cache is replaced.
+    pub fn stop_resource(&mut self, url: &str, profile: Option<ImageRequestProfile>) {
+        let key = match profile {
+            Some(profile) => image_resource_key(url, profile),
+            None => network_resource_url(url),
+        };
+        if self.has_cached_bytes(&key) { return; }
+        self.remove(&key);
+        self.stopped.insert(key);
     }
 
     /// Retain a page-transport failure so capture does not immediately repeat
@@ -385,7 +402,9 @@ impl RenderResourceCache {
                     .map(|(width, height)| (resolved_url, width, height)),
             );
         }
-        match self.entries.get(&network_resource_url(&resolved_url)) {
+        let key = network_resource_url(&resolved_url);
+        if self.stopped.contains(&key) { return Some(None); }
+        match self.entries.get(&key) {
             Some(entry @ CachedResource::Bytes { .. }) => Some(
                 entry.image_intrinsic().and_then(crate::ReplacedIntrinsic::natural_size)
                     .map(|(width, height)| (resolved_url, width, height)),
@@ -408,6 +427,7 @@ impl RenderResourceCache {
             return self.cached_image_metadata(&resolved_url, None);
         }
         let key = image_resource_key(&resolved_url, profile);
+        if self.stopped.contains(&key) { return Some(None); }
         match self.entries.get(&key) {
             Some(entry @ CachedResource::Bytes { .. }) => Some(
                 entry.image_intrinsic().and_then(crate::ReplacedIntrinsic::natural_size)
@@ -525,6 +545,7 @@ impl RenderResourceCache {
 
     fn get_or_load(&mut self, url: &str, is_font: bool) -> Option<Arc<[u8]>> {
         let url = network_resource_url(url);
+        if self.stopped.contains(&url) { return None; }
         if let Some(entry) = self.entries.get(&url) {
             match entry {
                 CachedResource::Bytes { bytes, .. } => return Some(Arc::clone(bytes)),
@@ -555,6 +576,7 @@ impl RenderResourceCache {
 
     fn get_or_load_image(&mut self, url: &str, profile: ImageRequestProfile) -> Option<Arc<[u8]>> {
         let key = image_resource_key(url, profile);
+        if self.stopped.contains(&key) { return None; }
         if let Some(entry) = self.entries.get(&key) {
             match entry {
                 CachedResource::Bytes { bytes, .. } => return Some(Arc::clone(bytes)),
@@ -1484,6 +1506,48 @@ impl PreparedRender {
         Some((rect.width.max(0.0), rect.height.max(0.0)))
     }
 
+    /// CSSOM View `checkVisibility()` over the retained cascade. An element
+    /// without a generated box is hidden, including unslotted light children
+    /// and closed details content. Zero-size boxes still count. `content-visibility: hidden` is
+    /// not implemented by the renderer, which paints that content, so it is
+    /// not consulted here either.
+    pub fn check_visibility(
+        &self,
+        tree: &DomTree,
+        id: obscura_dom::tree::NodeId,
+        check_opacity: bool,
+        check_visibility_css: bool,
+    ) -> bool {
+        let Some(style) = self.layout.styles.get(&id) else {
+            return false;
+        };
+        if style.display_contents || (check_visibility_css && style.computed_visibility_hidden) {
+            return false;
+        }
+        let document = tree.document();
+        let mut current = Some(id);
+        let mut box_known = self.layout.rects.contains_key(&id);
+        while let Some(node) = current.filter(|&node| node != document) {
+            let Some(style) = self.layout.styles.get(&node) else {
+                return false;
+            };
+            if style.display == crate::Display::None
+                || (check_opacity && style.opacity.is_some_and(|value| value <= 0.0))
+            {
+                return false;
+            }
+            let Some(parent) = crate::dom::rendered_parent(tree, node) else { return false; };
+            // Empty inline boxes may have no retained rect, but must still
+            // belong to the rendered child list (not closed details or slot fallback).
+            if !box_known {
+                if !crate::dom::rendered_children(tree, parent).contains(&node) { return false; }
+                box_known = self.layout.rects.contains_key(&parent);
+            }
+            current = Some(parent);
+        }
+        current == Some(document)
+    }
+
     /// Whether hit testing must ignore this element's generated box.
     pub fn pointer_events_none(&self, id: obscura_dom::tree::NodeId) -> bool {
         self.layout
@@ -1683,6 +1747,15 @@ impl PreparedRender {
         None
     }
 
+    /// Read common style-only properties without copying the full CSSOM and
+    /// inherited custom-property environment for each element.
+    pub fn computed_non_geometric_style(
+        &self,
+        id: obscura_dom::tree::NodeId,
+    ) -> Option<HashMap<&'static str, String>> {
+        Some(non_geometric_computed_style(self.layout.styles.get(&id)?))
+    }
+
     /// A compact CSSOM snapshot derived from the same final cascade and
     /// layout used by paint and geometry. Keeping this on `PreparedRender`
     /// lets script fetch all high-traffic computed properties in one op,
@@ -1694,6 +1767,58 @@ impl PreparedRender {
         let style = self.layout.styles.get(&id)?;
         let rect = self.layout.rects.get(&id);
         let mut out = non_geometric_computed_style(style);
+        out.insert(
+            "vertical-align",
+            match style.vertical_align {
+                Some(crate::VerticalAlign::Top) => "top",
+                Some(crate::VerticalAlign::Middle) => "middle",
+                Some(crate::VerticalAlign::Bottom) => "bottom",
+                None => "baseline",
+            }
+            .to_string(),
+        );
+        out.insert(
+            "text-transform",
+            match style.text_transform {
+                Some(crate::TextTransform::Uppercase) => "uppercase",
+                Some(crate::TextTransform::Lowercase) => "lowercase",
+                Some(crate::TextTransform::Capitalize) => "capitalize",
+                Some(crate::TextTransform::None) | None => "none",
+            }
+            .to_string(),
+        );
+        out.insert(
+            "list-style-type",
+            match style.list_style {
+                Some(crate::ListStyle::Disc) => "disc",
+                Some(crate::ListStyle::Circle) => "circle",
+                Some(crate::ListStyle::Square) => "square",
+                Some(crate::ListStyle::Decimal) => "decimal",
+                Some(crate::ListStyle::None) => "none",
+                // The initial value is `disc`; the UA sheet only sets a marker
+                // on list items, so an unstyled element still reports it.
+                None => "disc",
+            }
+            .to_string(),
+        );
+        out.insert(
+            "border-collapse",
+            if style.border_collapse == Some(true) {
+                "collapse"
+            } else {
+                "separate"
+            }
+            .to_string(),
+        );
+        out.insert(
+            "table-layout",
+            if style.table_layout_fixed {
+                "fixed"
+            } else {
+                "auto"
+            }
+            .to_string(),
+        );
         out.insert("font-size", css_px(style.font_size.unwrap_or(16.0)));
         out.insert(
             "font-weight",
@@ -2264,7 +2389,7 @@ pub(crate) fn non_geometric_computed_style(style: &crate::LayoutStyle) -> HashMa
     );
     out.insert(
         "visibility",
-        if style.visibility_hidden.unwrap_or(false) {
+        if style.visibility_hidden.unwrap_or(style.computed_visibility_hidden) {
             "hidden"
         } else {
             "visible"
@@ -2316,6 +2441,13 @@ fn computed_display(style: &crate::LayoutStyle) -> &'static str {
         "contents"
     } else if style.display == crate::Display::None {
         "none"
+    } else if let Some(display) = style.table_row_display {
+        match display {
+            crate::TableRowDisplay::Row => "table-row",
+            crate::TableRowDisplay::Group => "table-row-group",
+            crate::TableRowDisplay::Header => "table-header-group",
+            crate::TableRowDisplay::Footer => "table-footer-group",
+        }
     } else if active_webkit_clamp && style.webkit_box_display == Some(false) {
         "flow-root"
     } else if style.webkit_box_display == Some(false) && !active_webkit_clamp {
@@ -12575,7 +12707,10 @@ mod tests {
         for active in ["yes", "no"] {
             tree.with_node_mut(body, |node| node.set_attribute("data-active", active.into()));
             let full = prepare_dom(&tree, viewport, None, &mut resources).unwrap();
-            for name in ["flex", "contents", "item", "float", "suppressed", "suppressed-child"] {
+            let mut shared = crate::dom::NonGeometricStyleCache::new(
+                &tree, viewport, crate::CssMediaType::Screen, &cache,
+            ).unwrap();
+            for name in ["flex", "contents", "item", "float", "suppressed", "suppressed-child", "hidden"] {
                 let id = tree.get_element_by_id(name).unwrap();
                 let fast = crate::dom::computed_style_without_layout(
                     &tree, id, viewport, crate::CssMediaType::Screen, &cache, "color",
@@ -12585,7 +12720,17 @@ mod tests {
                     assert_eq!(value, expected[property], "{name}.{property} with {active}");
                 }
             }
-            for name in ["inherit", "hidden", "animated", "query"] {
+            // Reverse the usual traversal, crossing branches and then reading
+            // cached ancestors after their children.
+            for name in ["item", "contents", "flex", "suppressed-child", "suppressed", "float"] {
+                let id = tree.get_element_by_id(name).unwrap();
+                let fast = shared.resolve(&tree, id, "color").unwrap();
+                let expected = full.computed_style(id).unwrap();
+                for (property, value) in fast {
+                    assert_eq!(value, expected[property], "shared {name}.{property} with {active}");
+                }
+            }
+            for name in ["inherit", "animated", "query"] {
                 assert!(crate::dom::computed_style_without_layout(
                     &tree, tree.get_element_by_id(name).unwrap(), viewport,
                     crate::CssMediaType::Screen, &cache, "display",
@@ -13854,6 +13999,43 @@ mod tests {
     }
 
     #[test]
+    fn stopped_resources_survive_cache_eviction_and_preserve_request_profiles() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let loader_calls = calls.clone();
+        let mut cache = RenderResourceCache::with_loader_and_limits(move |_url: &str| {
+            loader_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            None
+        }, 1, 4096);
+        let url = "https://example.test/image.png";
+        cache.stop_resource(url, Some(ImageRequestProfile::CorsInclude));
+        assert!(cache.has_live_image_outcome(url, ImageRequestProfile::CorsInclude));
+        assert!(!cache.has_live_image_outcome(url, ImageRequestProfile::NoCorsInclude));
+        cache.seed_shared(url.to_owned(), raster_cache_fixture());
+        assert!(cache.get_or_load_image(url, ImageRequestProfile::NoCorsInclude).is_some());
+        assert!(cache.get_or_load_image(url, ImageRequestProfile::CorsInclude).is_none());
+        cache.stop_resource(url, None);
+        assert!(cache.get_or_load_image(url, ImageRequestProfile::NoCorsInclude).is_some(),
+            "canceling a duplicate request must preserve already-loaded bytes");
+        cache.seed_shared("https://example.test/other.png".to_owned(), raster_cache_fixture());
+        cache.stop_resource(url, None);
+        assert!(cache.has_live_outcome(url));
+        assert_eq!(cache.cached_image_metadata(url, None), Some(None));
+        assert!(cache.get_or_load(url, true).is_none());
+        assert!(cache.get_or_load_image(url, ImageRequestProfile::CorsInclude).is_none());
+        cache.set_sync_loading_enabled(false);
+        assert!(cache.get_or_load_image(url, ImageRequestProfile::NoCorsInclude).is_none());
+        assert!(cache.take_sync_misses().is_empty());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let new_url = "https://example.test/new.png";
+        assert!(cache.get_or_load(new_url, false).is_none());
+        assert_eq!(cache.take_sync_misses(), vec![(new_url.to_owned(), None, false)]);
+        cache.seed_shared(url.to_owned(), raster_cache_fixture());
+        assert!(cache.get_or_load_image(url, ImageRequestProfile::NoCorsInclude).is_some());
+        assert_eq!(cache.retained_entry_count(), 1);
+        assert!(!RenderResourceCache::default().has_live_outcome(url));
+    }
+
+    #[test]
     fn cached_raster_relative_urls_preserve_request_profiles_and_pixels() {
         let url = "https://example.test/images/image.png";
         let base = "https://example.test/pages/index.html";
@@ -14951,6 +15133,57 @@ mod tests {
         assert_eq!((rect.width, rect.height), (40.0, 20.0));
         assert_eq!(prepared.layout.styles[&id].outline.specified_width, 9.0);
         assert_eq!(prepared.computed_style(id).unwrap()["outline-width"], "0px");
+    }
+
+    #[test]
+    fn computed_visibility_reports_inherited_value() {
+        let tree = parse_html(
+            r#"<html><head><style>.h{visibility:hidden}</style></head><body>
+                <div class="h"><span id="inherited">a</span>
+                <span id="restored" style="visibility:visible">b</span></div>
+                <span id="plain">c</span></body></html>"#,
+        );
+        let mut resources = RenderResourceCache::default();
+        let prepared = prepare_dom(&tree, (80.0, 50.0), None, &mut resources).unwrap();
+        let visibility = |id| {
+            prepared
+                .computed_style(tree.get_element_by_id(id).unwrap())
+                .unwrap()["visibility"]
+                .clone()
+        };
+        assert_eq!(visibility("inherited"), "hidden");
+        assert_eq!(visibility("restored"), "visible");
+        assert_eq!(visibility("plain"), "visible");
+    }
+
+    #[test]
+    fn check_visibility_uses_ancestor_display_opacity_and_computed_visibility() {
+        let tree = parse_html(
+            r#"<html><head><style>.n{display:none}.h{visibility:hidden}.o{opacity:0}
+                .c{display:contents}</style></head><body>
+                <div class="n"><span id="under-none">a</span></div>
+                <div class="h"><span id="under-hidden">b</span></div>
+                <div class="o"><span id="under-transparent">c</span></div>
+                <span id="contents" class="c">d</span>
+                <span id="plain">e</span></body></html>"#,
+        );
+        let mut resources = RenderResourceCache::default();
+        let prepared = prepare_dom(&tree, (80.0, 50.0), None, &mut resources).unwrap();
+        let check = |id, opacity, visibility| {
+            prepared.check_visibility(
+                &tree,
+                tree.get_element_by_id(id).unwrap(),
+                opacity,
+                visibility,
+            )
+        };
+        assert!(!check("under-none", false, false));
+        assert!(check("under-hidden", false, false));
+        assert!(!check("under-hidden", false, true));
+        assert!(check("under-transparent", false, false));
+        assert!(!check("under-transparent", true, false));
+        assert!(!check("contents", false, false));
+        assert!(check("plain", true, true));
     }
 
     #[test]
@@ -17269,6 +17502,43 @@ mod tests {
         assert_eq!(computed("right")["clear"], "both");
         assert_eq!(computed("plain")["float"], "none");
         assert_eq!(computed("plain")["clear"], "none");
+    }
+
+    /// `vertical-align`, `text-transform`, `list-style-type`, `border-collapse`
+    /// and `table-layout` are cascaded and used by layout, but were never put
+    /// in the computed-style snapshot, so `getComputedStyle()` returned `''`
+    /// for them even when the page declared them explicitly. Chromium 147
+    /// values are asserted for both the declared and the initial case.
+    #[test]
+    fn computed_style_exposes_table_list_and_text_longhands() {
+        let tree = parse_html(
+            r#"<style>#set{vertical-align:middle;list-style-type:square;
+                 border-collapse:collapse;table-layout:fixed;text-transform:uppercase}</style>
+               <table id="set"><tr><td>x</td></tr></table>
+               <div id="unset">a</div>"#,
+        );
+        let mut resources = RenderResourceCache::default();
+        let prepared =
+            prepare_dom(&tree, (320.0, 200.0), None, &mut resources).expect("prepared render");
+        let computed = |id| {
+            prepared
+                .computed_style(tree.get_element_by_id(id).unwrap())
+                .expect("computed style")
+        };
+
+        let set = computed("set");
+        assert_eq!(set["vertical-align"], "middle");
+        assert_eq!(set["list-style-type"], "square");
+        assert_eq!(set["border-collapse"], "collapse");
+        assert_eq!(set["table-layout"], "fixed");
+        assert_eq!(set["text-transform"], "uppercase");
+
+        let unset = computed("unset");
+        assert_eq!(unset["vertical-align"], "baseline");
+        assert_eq!(unset["list-style-type"], "disc");
+        assert_eq!(unset["border-collapse"], "separate");
+        assert_eq!(unset["table-layout"], "auto");
+        assert_eq!(unset["text-transform"], "none");
     }
 
     #[test]

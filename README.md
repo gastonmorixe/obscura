@@ -86,56 +86,23 @@ Want to sponsor? Email [hello@obscura.sh](mailto:hello@obscura.sh).
 <table>
    <tr>
     <td width="200" align="center" valign="middle">
-      <a href="https://go.nodemaven.com/obscurareadmeseptember2026" target="_blank">
-        <img alt="NodeMaven" src="assets/sponsors/nodemaven3.png" width="180"/>
+      <a href="https://go.nodemaven.com/obscurareadmeoctober" target="_blank">
+        <img alt="NodeMaven" src="assets/sponsors/nodemaven4.png" width="180"/>
       </a>
     </td>
     <td valign="middle">
-      <a href="https://go.nodemaven.com/obscurareadmeseptember2026" target="_blank"><b>NodeMaven</b></a>: The most efficient proxy provider for Web Scraping and Automation with the Highest Quality IP on the market.<br><br>
-      <b>Why <a href="https://go.nodemaven.com/obscurareadmeseptember2026" target="_blank">NodeMaven</a>?</b><br>
+      <a href="https://go.nodemaven.com/obscurareadmeoctober" target="_blank"><b>NodeMaven</b></a>: The most efficient proxy provider for Web Scraping and Automation with the Highest Quality IP on the market.<br><br>
+      <b>Why <a href="https://go.nodemaven.com/obscurareadmeoctober" target="_blank">NodeMaven</a>?</b><br>
       ZIP targeting<br>
       99.9% uptime<br>
       IP filtering: all proxies have fraud score &lt;97%<br>
       No KYC required<br>
+      Check Nodemaven's new GitHub for more web scraping and automation solutions - https://github.com/nodemaven<br>
       Unique free tools: Proxy Bandwidth Checker, Meta Tag Checker, IP Lookup and others!<br><br>
       🎁 <b>Special codes for Obscura users:</b><br>
       <b>OBSCURA35</b> - 35% off to Mobile and Residential Proxies<br>
       <b>OBSCURA40</b> - 40% off to ISP (Static) Proxies
     </td>
- <tr>
-  <td width="200" align="center" valign="middle">
-    <a href="https://proxyempire.io/?ref=obscura&utm_source=obscuragithub" target="_blank">
-      <img alt="ProxyEmpire" src="assets/sponsors/proxyempire.png" width="180"/>
-    </a>
-  </td>
-  <td valign="middle">
-    🚀 <b>Obscura × ProxyEmpire</b><br>
-    Using Obscura for AI agents, browser automation, or web scraping? Power it with reliable residential and mobile proxies from <a href="https://proxyempire.io/?ref=obscura&utm_source=obscuragithub"><b>ProxyEmpire</b></a>.<br><br>
-    <b>
-      🌍 30M+ residential IPs in 170+ countries<br>
-      📱 4G/5G mobile proxies<br>
-      🔄 Rotating & sticky sessions<br>
-      🎯 City, region & ISP targeting<br>
-      🔐 HTTP, HTTPS & SOCKS5 support<br><br>
-      🎁 Use code <b>OBSCURA35</b> for a <b>35% recurring discount</b>.<br><br>
-    </b>
-    Better proxies. Fewer blocks. More scalable automation.
-  </td>
-    <tr>
-    <td width="200" align="center" valign="middle">
-      <a href="https://masklabs.io" target="_blank">
-        <img alt="Masklabs" src="assets/sponsors/Masklabs.png" width="180"/>
-      </a>
-    </td>
-    <td valign="middle">
-      <b>Obscura + <a href="https://masklabs.io" target="_blank">Masklabs</a></b><br><br>
-      Obscura masks the browser. Masklabs masks the traffic.<br><br>
-      Mobile proxies for scrapers, bots, and AI agents that need to look human. Real carrier IPs across a rotating pool, zero shared-IP baggage.<br><br>
-      Pair Obscura's stealth rendering with Masklabs' mobile network and your requests blend into everyday traffic.<br><br>
-      💸 <b>Try it free for 30 days.</b><br><br>
-      🎁 Use code <b>OBSCURA25</b> for <b>25% off your first month</b>.
-    </td>
-  </tr>
 </table>
 
 ## Install
@@ -328,6 +295,8 @@ obscura --proxy http://127.0.0.1:8080 scrape https://example.com https://news.yc
 
 ## Puppeteer / Playwright
 
+[Media preference emulation](docs/CDP-media.md) covers color-scheme and reduced-motion overrides.
+
 ### Puppeteer
 
 ```bash
@@ -410,7 +379,7 @@ MCP functionality.
 - `event.isTrusted = true` for dispatched events
 - Hidden internal properties (`Object.keys(window)` safe)
 - Native function masking (`Function.prototype.toString()` → `[native code]`)
-- `navigator.webdriver = undefined` (matches real Chrome)
+- `navigator.webdriver = false`
 
 ### Tracker Blocking
 - 3,520 domains blocked
@@ -434,6 +403,8 @@ Obscura implements the Chrome DevTools Protocol for Puppeteer/Playwright compati
 | **Storage** | getCookies, setCookies, deleteCookies |
 | **Input** | dispatchMouseEvent, dispatchKeyEvent |
 | **LP** | getMarkdown (DOM-to-Markdown conversion) |
+
+Fetch interception pauses matching main-document HTTP requests before transport. Fulfillment supplies the document body without contacting the server; continuation URL, method, body, and header overrides apply to that request only.
 
 To download a large resource without one giant `Network.getResponseBody` blob, call `Fetch.takeResponseBodyAsStream` then read it in chunks with `IO.read` / `IO.close`. Response bodies over the cache limit (`OBSCURA_NETWORK_BODY_BUFFER_BYTES`, default 2 MiB) are not retained, so raise that limit when you intend to stream large downloads.
 ## CLI Reference
@@ -483,6 +454,10 @@ Start a CDP WebSocket server.
 | `--proxy` | — | HTTP/SOCKS5 proxy URL |
 | `--stealth` | off | Enable anti-detection + tracker blocking |
 | `--workers` | `1` | Number of parallel worker processes |
+| `--worker-max-connections` | off | Recycle a worker after N CDP connections (needs `--workers` > 1) |
+| `--worker-max-rss` | off | Recycle a worker above this many MB resident (Linux) |
+| `--worker-max-age` | off | Recycle a worker after this many seconds |
+| `--worker-drain-timeout` | `120` | Seconds a replaced worker may finish its live connections before it is killed |
 | `--font-dir` | — | Recursively load fonts once per worker (repeatable; render build) |
 | `--obey-robots` | off | Respect robots.txt |
 | `--storage-dir` | — | Persist the browser session (cookies + `localStorage`) under this directory. See *Persistent sessions* below |
@@ -490,6 +465,11 @@ Start a CDP WebSocket server.
 With multiple workers, exited children are reaped and restarted. New connections
 use ready workers only; if none are ready, the balancer returns HTTP 503. A crash
 still closes that worker's existing sessions, which clients must reconnect.
+
+The `--worker-max-*` options recycle workers gracefully: a replacement starts
+first, new connections go only to it, and the old worker keeps serving the
+connections it already has until they close (or the drain timeout passes), then
+exits. Each recycle is logged with its reason.
 Worker errors remain visible on stderr.
 
 ### `obscura fetch <URL>`
@@ -500,7 +480,7 @@ Fetch and render a single page.
 |------|---------|-------------|
 | `--dump` | `html` | Output: `html`, `text`, `links`, `markdown`, `assets` (NDJSON of every sub-resource URL the page references), or `original` (raw response body) |
 | `--eval` | — | JavaScript expression to evaluate |
-| `--wait-until` | `load` | Wait: `load`, `domcontentloaded`, `networkidle0` |
+| `--wait-until` | `load` | Wait: `load`, `domcontentloaded`, `networkidle0`. Network idle counts normal and stealth requests and requires a 500 ms quiet window within `--timeout`; an expired deadline is an error. |
 | `--timeout` | `30` | Maximum navigation time in seconds |
 | `--wait` | adaptive, up to `5` | Post-load settling; an explicit value is a fixed delay in seconds |
 | `--selector` | — | Wait for CSS selector |
@@ -554,6 +534,10 @@ model.
 
 Scrape multiple URLs in parallel with worker processes.
 
+`scrape` and `fetch --file ... --dump original` keep at most `--concurrency`
+jobs active, starting the next URL as soon as a slot becomes available. Results
+remain in input order. URL input and completed results are still held in memory.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--concurrency` | `10` | Parallel workers |
@@ -587,6 +571,7 @@ Optional flags (both transports):
 |------|-------------|
 | `--proxy <URL>` | HTTP/SOCKS5 proxy |
 | `--user-agent <UA>` | Custom User-Agent string |
+| `--font-dir <DIR>` | Load additional fonts before rendering (repeatable; render build) |
 | `--stealth` | Enable anti-detection mode |
 | `--storage-dir <DIR>` | Persist cookies + `localStorage` across runs. See *Persistent sessions* under `obscura fetch`. |
 
