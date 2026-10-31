@@ -59,14 +59,14 @@ impl wreq::dns::Resolve for SsrfGuardResolver {
 
 #[cfg(feature = "stealth")]
 pub const STEALTH_USER_AGENT: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
 
-/// Chrome 148's `sec-ch-ua` brand list. Chrome 148 dropped the
+/// Chrome 154's `sec-ch-ua` brand list. Chrome 148+ dropped the
 /// `"Google Chrome";v="…"` brand that earlier versions emitted and
 /// switched to a 2-brand GREASE format. Override on hop 0 so the wire
-/// identity matches live Chrome 148 (Bloomberg/PerimeterX + WSJ/DataDome).
+/// identity matches live Chrome 154 (Bloomberg/PerimeterX + WSJ/DataDome).
 #[cfg(feature = "stealth")]
-pub const STEALTH_SEC_CH_UA: &str = "\"Not/A)Brand\";v=\"99\", \"Chromium\";v=\"148\"";
+pub const STEALTH_SEC_CH_UA: &str = "\"Not A(Brand\";v=\"99\", \"Chromium\";v=\"154\"";
 
 // The wreq emulation platform must agree with navigator / sec-ch-ua-platform.
 // Private branch intentionally uses macOS: Linux Chrome is a rarer fingerprint
@@ -214,8 +214,8 @@ impl StealthHttpClient {
     }
 
     // Port of private gm/private stealth intent onto main's wreq-util API:
-    // Chrome 148 profile + macOS platform. Header overrides in fetch() keep
-    // sec-ch-ua / UA on the same Chrome 148 macOS identity (2-brand GREASE).
+    // Chrome 154 profile + macOS platform. Header overrides in fetch() keep
+    // sec-ch-ua / UA on the same Chrome 154 macOS identity (2-brand GREASE).
     // accept-encoding is left to the emulation (emulation-compression feature
     // in Cargo.toml) so wire order stays Chrome-correct and bodies still
     // decompress. Do NOT add cache-control/pragma (DataDome fingerprint).
@@ -226,7 +226,7 @@ impl StealthHttpClient {
         allow_private_network: bool,
     ) -> Self {
         let emulation_opts = wreq_util::Emulation::builder()
-            .profile(wreq_util::Profile::Chrome148)
+            .profile(wreq_util::Profile::Chrome154)
             .platform(wreq_util::Platform::MacOS)
             .build();
 
@@ -359,7 +359,7 @@ impl StealthHttpClient {
             validate_request_mode(&request, &current_url)?;
             let mut req = self.client.get(current_url.as_str());
 
-            // Version-identity overrides (private Chrome 148). Emulation still
+            // Version-identity overrides (private Chrome 154). Emulation still
             // owns accept-encoding. Do NOT add cache-control/pragma (DataDome).
             // Upstream ResourceRequest drives accept/sec-fetch/referer/cookies.
             // Navigate adds complete Chrome nav headers (priority + UIR + user).

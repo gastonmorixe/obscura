@@ -1961,9 +1961,10 @@ impl Page {
         rt.set_cookie_jar(self.context.cookie_jar.clone());
         rt.set_localstorage_store(self.context.localstorage_store.clone());
         rt.set_http_client(self.http_client.clone());
-        // A minimal document so content-script bootstraps that poke at
-        // `document` during background init don't throw.
+        // Initialize the minimal document before extension scripts run.
+        // set_dom stores the tree. run_page_init exposes globalThis.document.
         rt.set_dom(parse_html("<html><head></head><body></body></html>"));
+        rt.run_page_init();
 
         let preload = ext.build_preload_script(url);
         if let Err(e) = rt.execute_script_guarded("<obscura-ext:prepass>", &preload) {

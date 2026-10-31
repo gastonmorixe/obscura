@@ -66,6 +66,14 @@ taffy = { path = "vendor/taffy" }
 # Carry the same canonical variable-font coordinates through shaping and
 # rasterization until the upstream API exposes them.
 cosmic-text = { path = "vendor/cosmic-text" }
+# crates.io wreq 0.16.1 lacks trust_anchors / grease_sigalgs_enabled needed by
+# git wreq-util Chrome150-154 profiles. Same package version on upstream main.
+wreq = { git = "https://github.com/0x676e67/wreq", rev = "c6fd8b1acfa96bc0175e2825c88ccda28e23d9b5" }
+# wreq's own [patch] for these does not apply when we consume wreq as a git dep.
+# crates.io btls 0.5.6 lacks set_requested_trust_anchors / set_grease_sigalgs_enabled.
+btls = { git = "https://github.com/0x676e67/btls", rev = "f5a8a483eca2e0b3f539f944604da3f8e14a910e" }
+btls-sys = { git = "https://github.com/0x676e67/btls", rev = "f5a8a483eca2e0b3f539f944604da3f8e14a910e" }
+tokio-btls = { git = "https://github.com/0x676e67/btls", rev = "f5a8a483eca2e0b3f539f944604da3f8e14a910e" }
 
 # Unwinding (the Rust default) is REQUIRED for the anti-panic protocol: ops wrap
 # their bodies in std::panic::catch_unwind so a panic degrades to an error return

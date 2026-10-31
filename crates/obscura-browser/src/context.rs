@@ -154,13 +154,13 @@ impl BrowserContext {
         }
         let profile = crate::profiles::select_profile();
         // Prefer an explicit UA; otherwise use the selected profile. When
-        // stealth is on and no UA was given, prefer the private Chrome 148
+        // stealth is on and no UA was given, prefer the private Chrome 154
         // macOS identity that was tuned against Bloomberg/PerimeterX and
         // WSJ/DataDome rather than the first rotated profile entry.
         let stealth_default = stealth && user_agent.is_none();
         let resolved_ua = user_agent.unwrap_or_else(|| {
             if stealth {
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36".to_string()
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36".to_string()
             } else {
                 profile.user_agent.to_string()
             }

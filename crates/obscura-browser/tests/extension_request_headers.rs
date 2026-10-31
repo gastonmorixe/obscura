@@ -122,6 +122,68 @@ async fn no_headers_for_out_of_scope_url() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn prepass_initializes_document_before_content_script_registers_headers() {
+    let tmp_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp");
+    std::fs::create_dir_all(&tmp_root).unwrap();
+    let tmp = tempfile::Builder::new()
+        .prefix("obscura-reqhdr-document")
+        .tempdir_in(&tmp_root)
+        .unwrap();
+    std::fs::write(
+        tmp.path().join("manifest.json"),
+        r#"{
+          "manifest_version": 2,
+          "name": "DocumentHeaderTest",
+          "version": "1.0",
+          "permissions": ["*://example.test/*", "tabs", "webRequest", "webRequestBlocking"],
+          "background": { "scripts": ["bg.js"] }
+        }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.path().join("bg.js"),
+        r#"
+        chrome.tabs.onUpdated.addListener(function (tabId, changeInfo) {
+          if (changeInfo.status === "complete") {
+            chrome.tabs.executeScript(tabId, { file: "content.js" });
+          }
+        });
+        "#,
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.path().join("content.js"),
+        r#"
+        setTimeout(function () {
+          // A null document throws before the listener can register.
+          if (!document.querySelector("body")) {
+            throw new Error("prepass body is missing");
+          }
+          chrome.webRequest.onBeforeSendHeaders.addListener(function (details) {
+            var headers = details.requestHeaders || [];
+            headers.push({ name: "X-Prepass-Document", value: "initialized" });
+            return { requestHeaders: headers };
+          }, { urls: ["*://example.test/*"] }, ["blocking", "requestHeaders"]);
+        }, 0);
+        "#,
+    )
+    .unwrap();
+    let ctx = Arc::new(
+        BrowserContext::with_options("test".into(), None, false)
+            .with_extension(runtime_from_dir(tmp.path())),
+    );
+    let page = Page::new("p".into(), ctx);
+    let hdrs = page
+        .resolve_extension_request_headers("https://example.test/article")
+        .await;
+    assert_eq!(
+        hdrs.get("X-Prepass-Document").map(String::as_str),
+        Some("initialized"),
+        "content-script timer must access the document before registering the listener: {hdrs:?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn no_extension_means_no_headers() {
     let ctx = Arc::new(BrowserContext::with_options("test".into(), None, false));
     let page = Page::new("p".into(), ctx);

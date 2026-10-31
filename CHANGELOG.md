@@ -7,6 +7,13 @@ under *Unreleased* land in the next tag.
 
 ## [Unreleased]
 
+### Changed
+
+- **Stealth Chrome identity 148 -> 154.** Wire UA, `sec-ch-ua` GREASE brand
+  `"Not A(Brand"`, `Profile::Chrome154`, CDP product/`jsVersion` (V8 15.4.0.0),
+  bootstrap/navigator defaults, and profile table now advertise Chrome 154
+  macOS. The `major >= 148` 2-brand GREASE threshold is unchanged.
+
 ## [0.2.4] - 2026-10-10
 
 Private-line release aligned with upstream tag `v0.2.4` / `upstream/main` @ `73299d5`, while keeping WebExtension, localStorage, stealth Chrome 148, fetch-worker, and dist CI.
