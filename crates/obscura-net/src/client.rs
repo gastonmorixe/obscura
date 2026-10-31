@@ -1010,7 +1010,7 @@ fn chrome_client_hints(ua: &str) -> (String, String) {
         .nth(1)
         .and_then(|s| s.split('.').next())
         .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(154);
+        .unwrap_or(156);
     const GREASE_CHARS: [char; 11] = [' ', '(', ':', '-', '.', '/', ')', ';', '=', '?', '_'];
     const GREASE_VER: [&str; 3] = ["8", "99", "24"];
     const PERMS: [[usize; 3]; 6] = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
@@ -1072,7 +1072,7 @@ impl ObscuraHttpClient {
             proxy_url: proxy_url.map(|s| s.to_string()),
             cookie_jar,
             user_agent: RwLock::new(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36".to_string(),
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36".to_string(),
             ),
             accept_language: RwLock::new("en-US,en;q=0.9".to_string()),
             extra_headers: RwLock::new(HashMap::new()),
@@ -1502,7 +1502,7 @@ impl ObscuraHttpClient {
             headers.insert(
                 HeaderName::from_static("sec-ch-ua"),
                 HeaderValue::from_str(&sec_ch_ua)
-                    .unwrap_or_else(|_| HeaderValue::from_static("\"Not A(Brand\";v=\"99\", \"Chromium\";v=\"154\"")),
+                    .unwrap_or_else(|_| HeaderValue::from_static("\"Not A(Brand\";v=\"99\", \"Chromium\";v=\"156\"")),
             );
             headers.insert(HeaderName::from_static("sec-ch-ua-mobile"), HeaderValue::from_static("?0"));
             headers.insert(
@@ -1514,7 +1514,7 @@ impl ObscuraHttpClient {
                 headers.insert(HeaderName::from_static("upgrade-insecure-requests"), HeaderValue::from_static("1"));
             }
             headers.insert(USER_AGENT, HeaderValue::from_str(&ua).unwrap_or_else(|_| {
-                HeaderValue::from_static("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36")
+                HeaderValue::from_static("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36")
             }));
             headers.insert(
                 reqwest::header::ACCEPT,

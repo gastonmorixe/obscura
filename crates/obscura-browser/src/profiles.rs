@@ -43,7 +43,7 @@ pub static PROFILES: &[BrowserProfile] = &[
         ua_platform_version: "15.0.0",
     },
     BrowserProfile {
-        user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+        user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
         platform: "Win32",
         ua_platform: "Windows",
         ua_platform_version: "15.0.0",
@@ -85,7 +85,7 @@ pub static PROFILES: &[BrowserProfile] = &[
         ua_platform_version: "14.6.0",
     },
     BrowserProfile {
-        user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+        user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
         platform: "MacIntel",
         ua_platform: "macOS",
         ua_platform_version: "14.6.0",
@@ -123,8 +123,8 @@ pub fn select_profile() -> &'static BrowserProfile {
     if env_enabled("OBSCURA_ROTATE_PROFILE") {
         return random_profile();
     }
-    // Stable default matches the private stealth contract (Chrome 154 macOS).
-    // Index of the last MacIntel 154 entry above.
+    // Stable default matches the private stealth contract (Chrome 156 macOS).
+    // Index of the last MacIntel 156 entry above.
     &PROFILES[PROFILES.len() - 1]
 }
 

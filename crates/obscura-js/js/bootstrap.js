@@ -8192,7 +8192,7 @@ globalThis.ContentIndex = class ContentIndex {};
 
 function _chromeMajor() {
   var m = (globalThis.__obscura_ua || '').match(/Chrome\/(\d+)/);
-  return m ? (m[1] | 0) : 154;
+  return m ? (m[1] | 0) : 156;
 }
 // Chromium derives the sec-ch-ua GREASE brand, version, and brand order
 // deterministically from the Chrome major version
@@ -8333,12 +8333,12 @@ globalThis.navigator = {
   defGetter('userAgent', function() {
     return globalThis.__obscura_ua ||
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
-      "(KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
+      "(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36";
   });
   defGetter('appVersion', function() {
     return (globalThis.__obscura_ua ||
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
-      "(KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36").replace('Mozilla/', '');
+      "(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36").replace('Mozilla/', '');
   });
   defGetter('platform', function() {
     return globalThis.__obscura_platform || "Win32";

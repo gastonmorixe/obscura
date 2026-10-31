@@ -1,0 +1,658 @@
+[
+  {
+    "sha": "4d21e3b65d6846187e02802172073438944e6399",
+    "node_id": "C_kwDON29_KtoAKDRkMjFlM2I2NWQ2ODQ2MTg3ZTAyODAyMTcyMDczNDM4OTQ0ZTYzOTk",
+    "commit": {
+      "author": {
+        "name": "dependabot[bot]",
+        "email": "49699333+dependabot[bot]@users.noreply.github.com",
+        "date": "2026-10-29T09:00:05Z"
+      },
+      "committer": {
+        "name": "GitHub",
+        "email": "noreply@github.com",
+        "date": "2026-10-29T09:00:05Z"
+      },
+      "message": "build(deps): update zstd requirement from 0.13.3 to 0.14.3 (#130)\n\nUpdates the requirements on [zstd](https://github.com/gyscos/zstd-rs) to permit the latest version.\n- [Release notes](https://github.com/gyscos/zstd-rs/releases)\n- [Commits](https://github.com/gyscos/zstd-rs/compare/v0.13.3...v0.14.3)\n\n---\nupdated-dependencies:\n- dependency-name: zstd\n  dependency-version: 0.14.3\n  dependency-type: direct:production\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+      "tree": {
+        "sha": "6f52a11ed28d114728178920fff49c5cc2252b05",
+        "url": "https://api.github.com/repos/0x676e67/wreq-util/git/trees/6f52a11ed28d114728178920fff49c5cc2252b05"
+      },
+      "url": "https://api.github.com/repos/0x676e67/wreq-util/git/commits/4d21e3b65d6846187e02802172073438944e6399",
+      "comment_count": 0,
+      "verification": {
+        "verified": true,
+        "reason": "valid",
+        "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJq4wsVCRC1aQ7uu5UhlAAA7/UQAEzySzchCyBY3LzONFREGdyO\nr/nvVm+YHBaxpZSCBV9kZX47Bsl6Q7evxOnl9rnxp2HAXVGq5oUMYazyFmhk13u8\nDU8Lq+OBkIeZMpiHODGCrv12Spls0G9Ydk2dCei96RUA1SWdLYnt8d4nOoxN7vIr\nD9zA1SoKkjUgT582kb5s4bTILz8jeebSM3SjhYogc7S+VyQWSCeQyzlF2h0eUC+j\nrBsMPYPsGUPX6g5SCSzIrUmU4ZkkqyiEwZ/B96Yh/0RM/IYPzfGhkjc11hfLHFmG\nFjthHcxQKSxZhLI1hRgdfv9jHxdAG32ndW5ik/F1sdxATOOWQSk12JCxwExuHwCU\nA5/WXTVeN0csbRTX5RuuzG8yVF+T9DzCzYFhiPpiOi8bzyhHvXHwZUoiivN8pRZP\nvn8yp2EEetSNyvbkGOWmXMlBCYr7Pf0I5no1oNL9f78DNo7ldb0OBF1vqY+TFak7\nFi0WVgJ7EzIXR2peObvasDlTeyCniePO1griEVsNsFQF3B9Qb1j8nu7dJMg0VFGB\nRn2tkUKfHP/sFjK3GLAtK8Go2vUCloHaP8h+o+LkfVvxIohvLPMSZOLSmZXbRBwQ\nbAP8+w7T7PW/jrwxoMCja6r5L/6/0XeSoGD2aRKZy11k/iO8kUjYt6k+pWD1voNM\nYVWijcfSUEXG5XEF5nT1\n=OT+H\n-----END PGP SIGNATURE-----\n",
+        "payload": "tree 6f52a11ed28d114728178920fff49c5cc2252b05\nparent 5715529002738f46eea86a7271f918f9374d3582\nauthor dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> 1793264405 +0800\ncommitter GitHub <noreply@github.com> 1793264405 +0800\n\nbuild(deps): update zstd requirement from 0.13.3 to 0.14.3 (#130)\n\nUpdates the requirements on [zstd](https://github.com/gyscos/zstd-rs) to permit the latest version.\n- [Release notes](https://github.com/gyscos/zstd-rs/releases)\n- [Commits](https://github.com/gyscos/zstd-rs/compare/v0.13.3...v0.14.3)\n\n---\nupdated-dependencies:\n- dependency-name: zstd\n  dependency-version: 0.14.3\n  dependency-type: direct:production\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+        "verified_at": "2026-10-29T09:00:05Z"
+      }
+    },
+    "url": "https://api.github.com/repos/0x676e67/wreq-util/commits/4d21e3b65d6846187e02802172073438944e6399",
+    "html_url": "https://github.com/0x676e67/wreq-util/commit/4d21e3b65d6846187e02802172073438944e6399",
+    "comments_url": "https://api.github.com/repos/0x676e67/wreq-util/commits/4d21e3b65d6846187e02802172073438944e6399/comments",
+    "author": {
+      "login": "dependabot[bot]",
+      "id": 49699333,
+      "node_id": "MDM6Qm90NDk2OTkzMzM=",
+      "avatar_url": "https://avatars.githubusercontent.com/in/29110?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/dependabot%5Bbot%5D",
+      "html_url": "https://github.com/apps/dependabot",
+      "followers_url": "https://api.github.com/users/dependabot%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/dependabot%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/dependabot%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/dependabot%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/dependabot%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/dependabot%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/dependabot%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/dependabot%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/dependabot%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "committer": {
+      "login": "web-flow",
+      "id": 19864447,
+      "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
+      "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/web-flow",
+      "html_url": "https://github.com/web-flow",
+      "followers_url": "https://api.github.com/users/web-flow/followers",
+      "following_url": "https://api.github.com/users/web-flow/following{/other_user}",
+      "gists_url": "https://api.github.com/users/web-flow/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/web-flow/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
+      "organizations_url": "https://api.github.com/users/web-flow/orgs",
+      "repos_url": "https://api.github.com/users/web-flow/repos",
+      "events_url": "https://api.github.com/users/web-flow/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/web-flow/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "parents": [
+      {
+        "sha": "5715529002738f46eea86a7271f918f9374d3582",
+        "url": "https://api.github.com/repos/0x676e67/wreq-util/commits/5715529002738f46eea86a7271f918f9374d3582",
+        "html_url": "https://github.com/0x676e67/wreq-util/commit/5715529002738f46eea86a7271f918f9374d3582"
+      }
+    ]
+  },
+  {
+    "sha": "5715529002738f46eea86a7271f918f9374d3582",
+    "node_id": "C_kwDON29_KtoAKDU3MTU1MjkwMDI3MzhmNDZlZWE4NmE3MjcxZjkxOGY5Mzc0ZDM1ODI",
+    "commit": {
+      "author": {
+        "name": "dependabot[bot]",
+        "email": "49699333+dependabot[bot]@users.noreply.github.com",
+        "date": "2026-10-01T17:04:36Z"
+      },
+      "committer": {
+        "name": "GitHub",
+        "email": "noreply@github.com",
+        "date": "2026-10-01T17:04:36Z"
+      },
+      "message": "build(deps): bump taiki-e/install-action from 2.85.5 to 2.87.20 (#119)\n\nBumps [taiki-e/install-action](https://github.com/taiki-e/install-action) from 2.85.5 to 2.87.20.\n- [Release notes](https://github.com/taiki-e/install-action/releases)\n- [Changelog](https://github.com/taiki-e/install-action/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/taiki-e/install-action/compare/v2.85.5...v2.87.20)\n\n---\nupdated-dependencies:\n- dependency-name: taiki-e/install-action\n  dependency-version: 2.87.20\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+      "tree": {
+        "sha": "554c78ba21792449f11a374da897a9871232b25e",
+        "url": "https://api.github.com/repos/0x676e67/wreq-util/git/trees/554c78ba21792449f11a374da897a9871232b25e"
+      },
+      "url": "https://api.github.com/repos/0x676e67/wreq-util/git/commits/5715529002738f46eea86a7271f918f9374d3582",
+      "comment_count": 0,
+      "verification": {
+        "verified": true,
+        "reason": "valid",
+        "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJqvpKkCRC1aQ7uu5UhlAAAOQMQAFlgdhoaVtXcQQSTWVvH9NCS\nCncETYsQOsiFYU6PWSyK+i1+k6ADJaUDuWBHVNqCB+5Ampq/LCanpoeKMuROlASA\nLG2jxJpiuhGa2P3GimT/3IVug80CDwBOi5PJZJnOKpVMKwwybOTv7OXJPKYoYHM0\np6/orru4kpIMi8BoQgIzMN8jVE2JeqFJRaerbmB57VRneGC6Dhcf6wz6vymKsgUH\nW1gl6zG+qjsxwyDxGWWI7fixblVsVvr2Tr0QiYm7gr0GjeClSpaFX/jYGFLBXowV\niyw7AyEnRHbjfT6TYEsQHgHs+YOIpVeNwBEYvAfLkGSUUNYCP0Q4fNGgk1AmllI8\nDVjc8TsuodmORX9mQ2jRAQy5jcP6rbDQIROHX3q4tXcQt+ealVN5opG/E1Z39ihL\nh1mEeH8SVux8mbTUb7HsMfIbLQ7z2sXJfMKtQ7rnwT22wxOfF1H2kJsxTzm9y99u\nhf54nc3z3GHNrrb3ZyY40MdNqIGSShBIF4w6NDaMG3mfczbj/lIEeBZ3SxfN4NPX\nlk21D8Sr2Luehf5G2F8qOs460JoLaeknjblHuzqMfS71VCydi93BhNS/OAfFJBzf\nCiOOKfSNpDjnMruN/eqlRP7lZO49xV1Kgt+Z54PEsdp9YvSlCHpowsOScsn83yfu\nZqCyVyhovOowHNJCoBTA\n=Wsgg\n-----END PGP SIGNATURE-----\n",
+        "payload": "tree 554c78ba21792449f11a374da897a9871232b25e\nparent 3d69aa02a30a6874dd6dcebff93a8fae5d208317\nauthor dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> 1790874276 +0800\ncommitter GitHub <noreply@github.com> 1790874276 +0800\n\nbuild(deps): bump taiki-e/install-action from 2.85.5 to 2.87.20 (#119)\n\nBumps [taiki-e/install-action](https://github.com/taiki-e/install-action) from 2.85.5 to 2.87.20.\n- [Release notes](https://github.com/taiki-e/install-action/releases)\n- [Changelog](https://github.com/taiki-e/install-action/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/taiki-e/install-action/compare/v2.85.5...v2.87.20)\n\n---\nupdated-dependencies:\n- dependency-name: taiki-e/install-action\n  dependency-version: 2.87.20\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+        "verified_at": "2026-10-01T17:04:37Z"
+      }
+    },
+    "url": "https://api.github.com/repos/0x676e67/wreq-util/commits/5715529002738f46eea86a7271f918f9374d3582",
+    "html_url": "https://github.com/0x676e67/wreq-util/commit/5715529002738f46eea86a7271f918f9374d3582",
+    "comments_url": "https://api.github.com/repos/0x676e67/wreq-util/commits/5715529002738f46eea86a7271f918f9374d3582/comments",
+    "author": {
+      "login": "dependabot[bot]",
+      "id": 49699333,
+      "node_id": "MDM6Qm90NDk2OTkzMzM=",
+      "avatar_url": "https://avatars.githubusercontent.com/in/29110?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/dependabot%5Bbot%5D",
+      "html_url": "https://github.com/apps/dependabot",
+      "followers_url": "https://api.github.com/users/dependabot%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/dependabot%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/dependabot%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/dependabot%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/dependabot%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/dependabot%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/dependabot%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/dependabot%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/dependabot%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "committer": {
+      "login": "web-flow",
+      "id": 19864447,
+      "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
+      "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/web-flow",
+      "html_url": "https://github.com/web-flow",
+      "followers_url": "https://api.github.com/users/web-flow/followers",
+      "following_url": "https://api.github.com/users/web-flow/following{/other_user}",
+      "gists_url": "https://api.github.com/users/web-flow/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/web-flow/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
+      "organizations_url": "https://api.github.com/users/web-flow/orgs",
+      "repos_url": "https://api.github.com/users/web-flow/repos",
+      "events_url": "https://api.github.com/users/web-flow/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/web-flow/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "parents": [
+      {
+        "sha": "3d69aa02a30a6874dd6dcebff93a8fae5d208317",
+        "url": "https://api.github.com/repos/0x676e67/wreq-util/commits/3d69aa02a30a6874dd6dcebff93a8fae5d208317",
+        "html_url": "https://github.com/0x676e67/wreq-util/commit/3d69aa02a30a6874dd6dcebff93a8fae5d208317"
+      }
+    ]
+  },
+  {
+    "sha": "3d69aa02a30a6874dd6dcebff93a8fae5d208317",
+    "node_id": "C_kwDON29_KtoAKDNkNjlhYTAyYTMwYTY4NzRkZDZkY2ViZmY5M2E4ZmFlNWQyMDgzMTc",
+    "commit": {
+      "author": {
+        "name": "0x676e67",
+        "email": "gngppz@gmail.com",
+        "date": "2026-10-01T17:04:20Z"
+      },
+      "committer": {
+        "name": "GitHub",
+        "email": "noreply@github.com",
+        "date": "2026-10-01T17:04:20Z"
+      },
+      "message": "feat(emulate): add Firefox 152 and correct profile settings (#122)",
+      "tree": {
+        "sha": "6674a9b780145f9314a233ac66c9d8c43c3311b7",
+        "url": "https://api.github.com/repos/0x676e67/wreq-util/git/trees/6674a9b780145f9314a233ac66c9d8c43c3311b7"
+      },
+      "url": "https://api.github.com/repos/0x676e67/wreq-util/git/commits/3d69aa02a30a6874dd6dcebff93a8fae5d208317",
+      "comment_count": 0,
+      "verification": {
+        "verified": true,
+        "reason": "valid",
+        "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJqvpKUCRC1aQ7uu5UhlAAA9ZUQADMDaoBFSW/cjv7tZ03FpevM\nc3vOo2tl2bEtlwl9MD5+/yGrgrTVYB7d0fzHIcMd+83lPdLeG7LiHVckkXarCC+6\ngZ1EfhUEzx7n+V66D0KDRSwFXDhTqOaXVMfDX3w3uuyPcGEWLwQ+odFXjQA+yC4W\nmBPG0OMdya63RxfaNASBdxLPBSyN3CBr5P4D6QWr/dpvcTT+3/qAypK+eLnnLgNx\nJWsX8yKZN8JUQ4uYeZUgI7DpviQgkYKF1Sp++vxIAdCPz2ZV75V4LS3JPw0YfpuF\ncCsvth89oBa5w23OiAEGtGAQHfDuUEBH6HIkOrnUMFGQiZ91PAt540aA55oAYZjd\nzCUIh1hjUQX9s9c1JrBwH48ERKma/GdqtHO31bY4NBy94rYBUcxmOJQG7LT4RlYi\nEP80ypzgkrBWPutZpaEb43k0uJ9YC0OVNgOnLxZYQa3IilKJL0Zq1IbyyMYxF7ao\n50POmput2ngyalH+cJZZjZQ08P8416/RcPQOLyRennYa8hUZWi8CeyhXMhNj8s9A\n6kzmRZWXmQw4u2fSCeTh+6OY0FnbTL+cmpEEJRBeaF4aAPuKA8WrErBeiAnSHJi3\n1vY2QEx/s94OFVL9SpdZebWBjsuedXJsxfrgXxC8IUGrqwEe7knRU+rtkb89//bP\nIw5efZEcU6kujU2B9ZWT\n=Vw+Y\n-----END PGP SIGNATURE-----\n",
+        "payload": "tree 6674a9b780145f9314a233ac66c9d8c43c3311b7\nparent bc97474745f096ba54314d0d33f6b801098f2a46\nauthor 0x676e67 <gngppz@gmail.com> 1790874260 +0800\ncommitter GitHub <noreply@github.com> 1790874260 +0800\n\nfeat(emulate): add Firefox 152 and correct profile settings (#122)",
+        "verified_at": "2026-10-01T17:04:21Z"
+      }
+    },
+    "url": "https://api.github.com/repos/0x676e67/wreq-util/commits/3d69aa02a30a6874dd6dcebff93a8fae5d208317",
+    "html_url": "https://github.com/0x676e67/wreq-util/commit/3d69aa02a30a6874dd6dcebff93a8fae5d208317",
+    "comments_url": "https://api.github.com/repos/0x676e67/wreq-util/commits/3d69aa02a30a6874dd6dcebff93a8fae5d208317/comments",
+    "author": {
+      "login": "0x676e67",
+      "id": 51810656,
+      "node_id": "MDQ6VXNlcjUxODEwNjU2",
+      "avatar_url": "https://avatars.githubusercontent.com/u/51810656?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/0x676e67",
+      "html_url": "https://github.com/0x676e67",
+      "followers_url": "https://api.github.com/users/0x676e67/followers",
+      "following_url": "https://api.github.com/users/0x676e67/following{/other_user}",
+      "gists_url": "https://api.github.com/users/0x676e67/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/0x676e67/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/0x676e67/subscriptions",
+      "organizations_url": "https://api.github.com/users/0x676e67/orgs",
+      "repos_url": "https://api.github.com/users/0x676e67/repos",
+      "events_url": "https://api.github.com/users/0x676e67/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/0x676e67/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "committer": {
+      "login": "web-flow",
+      "id": 19864447,
+      "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
+      "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/web-flow",
+      "html_url": "https://github.com/web-flow",
+      "followers_url": "https://api.github.com/users/web-flow/followers",
+      "following_url": "https://api.github.com/users/web-flow/following{/other_user}",
+      "gists_url": "https://api.github.com/users/web-flow/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/web-flow/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
+      "organizations_url": "https://api.github.com/users/web-flow/orgs",
+      "repos_url": "https://api.github.com/users/web-flow/repos",
+      "events_url": "https://api.github.com/users/web-flow/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/web-flow/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "parents": [
+      {
+        "sha": "bc97474745f096ba54314d0d33f6b801098f2a46",
+        "url": "https://api.github.com/repos/0x676e67/wreq-util/commits/bc97474745f096ba54314d0d33f6b801098f2a46",
+        "html_url": "https://github.com/0x676e67/wreq-util/commit/bc97474745f096ba54314d0d33f6b801098f2a46"
+      }
+    ]
+  },
+  {
+    "sha": "bc97474745f096ba54314d0d33f6b801098f2a46",
+    "node_id": "C_kwDON29_KtoAKGJjOTc0NzQ3NDVmMDk2YmE1NDMxNGQwZDMzZjZiODAxMDk4ZjJhNDY",
+    "commit": {
+      "author": {
+        "name": "0x676e67",
+        "email": "gngppz@gmail.com",
+        "date": "2026-10-01T17:03:13Z"
+      },
+      "committer": {
+        "name": "GitHub",
+        "email": "noreply@github.com",
+        "date": "2026-10-01T17:03:13Z"
+      },
+      "message": "fix(emulate): preserve version-specific Chrome trust anchor configuration (#121)",
+      "tree": {
+        "sha": "4f258dffa44f8489f82a02108f13a62d6aaaea21",
+        "url": "https://api.github.com/repos/0x676e67/wreq-util/git/trees/4f258dffa44f8489f82a02108f13a62d6aaaea21"
+      },
+      "url": "https://api.github.com/repos/0x676e67/wreq-util/git/commits/bc97474745f096ba54314d0d33f6b801098f2a46",
+      "comment_count": 0,
+      "verification": {
+        "verified": true,
+        "reason": "valid",
+        "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJqvpJRCRC1aQ7uu5UhlAAAgG0QACzM6KwNB7vGJtB60pD2n28S\ntnj/Y0+N1cgSCglNJNr/rk52R1RLoqFdZNy8u6kY96SSrqp5QZuxTgxGqD3PvGas\nVOo23lmTjmfiOVMIFH61ph348csbgoUWOuZ5laNMz+6icmBMakgT3R0bf4+os+/V\nsb7dAQJDtGYfs8aaTj4RLaPMoUzrDqaaUy6xo30yoljUpV/3pD9EcA/78Hfqh5sa\n6Ud9QAGVfKBBecVOD477SSXHcJAK2HBXmHCKb49XaR1TqrFwlYZkx8ym5RXMmUWA\nTDYBWbHEIB4OBksYvfDClbKmHnRNlcJo5fz9XivkCU5TQP5l/gtKItMpxhqJUG+M\nykr5M38vlXYYcGmqS2SVtTqBzHuIFRbQBaC5ci+4SFpCUnYTTTwH0YWZqnT6MW2x\nLSzZxUAdhCd1D9zokWbtfvwSJYlsZx58Rxv07dbzxOrohlriwtBJjsTu/qEmdEUh\njlyqpaAz8UTWb74HFfS9PZvp59PSPgGSNSZ9FDcFBuWxV4V2IC0e4PMxhI9qBY4/\nN5HJW9XzIoqzQVopuAi8Ax2Fk4smmpy63QpTppCI3/TDIINTZm5wldiI77bvti6w\nH86QtClclFiB+ruUiIvhbl374UgJ0Jf2hl1WOtFEMbY2ewKaqGyL5XfHYA2GrNj0\n1GYn63ay+BYzc/xwTv1D\n=993h\n-----END PGP SIGNATURE-----\n",
+        "payload": "tree 4f258dffa44f8489f82a02108f13a62d6aaaea21\nparent b9c023f4092595a014a1f7276f383ba355af02ec\nauthor 0x676e67 <gngppz@gmail.com> 1790874193 +0800\ncommitter GitHub <noreply@github.com> 1790874193 +0800\n\nfix(emulate): preserve version-specific Chrome trust anchor configuration (#121)",
+        "verified_at": "2026-10-01T17:03:14Z"
+      }
+    },
+    "url": "https://api.github.com/repos/0x676e67/wreq-util/commits/bc97474745f096ba54314d0d33f6b801098f2a46",
+    "html_url": "https://github.com/0x676e67/wreq-util/commit/bc97474745f096ba54314d0d33f6b801098f2a46",
+    "comments_url": "https://api.github.com/repos/0x676e67/wreq-util/commits/bc97474745f096ba54314d0d33f6b801098f2a46/comments",
+    "author": {
+      "login": "0x676e67",
+      "id": 51810656,
+      "node_id": "MDQ6VXNlcjUxODEwNjU2",
+      "avatar_url": "https://avatars.githubusercontent.com/u/51810656?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/0x676e67",
+      "html_url": "https://github.com/0x676e67",
+      "followers_url": "https://api.github.com/users/0x676e67/followers",
+      "following_url": "https://api.github.com/users/0x676e67/following{/other_user}",
+      "gists_url": "https://api.github.com/users/0x676e67/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/0x676e67/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/0x676e67/subscriptions",
+      "organizations_url": "https://api.github.com/users/0x676e67/orgs",
+      "repos_url": "https://api.github.com/users/0x676e67/repos",
+      "events_url": "https://api.github.com/users/0x676e67/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/0x676e67/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "committer": {
+      "login": "web-flow",
+      "id": 19864447,
+      "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
+      "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/web-flow",
+      "html_url": "https://github.com/web-flow",
+      "followers_url": "https://api.github.com/users/web-flow/followers",
+      "following_url": "https://api.github.com/users/web-flow/following{/other_user}",
+      "gists_url": "https://api.github.com/users/web-flow/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/web-flow/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
+      "organizations_url": "https://api.github.com/users/web-flow/orgs",
+      "repos_url": "https://api.github.com/users/web-flow/repos",
+      "events_url": "https://api.github.com/users/web-flow/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/web-flow/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "parents": [
+      {
+        "sha": "b9c023f4092595a014a1f7276f383ba355af02ec",
+        "url": "https://api.github.com/repos/0x676e67/wreq-util/commits/b9c023f4092595a014a1f7276f383ba355af02ec",
+        "html_url": "https://github.com/0x676e67/wreq-util/commit/b9c023f4092595a014a1f7276f383ba355af02ec"
+      }
+    ]
+  },
+  {
+    "sha": "b9c023f4092595a014a1f7276f383ba355af02ec",
+    "node_id": "C_kwDON29_KtoAKGI5YzAyM2Y0MDkyNTk1YTAxNGExZjcyNzZmMzgzYmEzNTVhZjAyZWM",
+    "commit": {
+      "author": {
+        "name": "mune",
+        "email": "mune3@proton.me",
+        "date": "2026-09-30T19:35:11Z"
+      },
+      "committer": {
+        "name": "GitHub",
+        "email": "noreply@github.com",
+        "date": "2026-09-30T19:35:11Z"
+      },
+      "message": "feat(emulate): add Chrome 154 (#120)",
+      "tree": {
+        "sha": "81ac19cc8ce2827e5db804b644cce0c585f6280e",
+        "url": "https://api.github.com/repos/0x676e67/wreq-util/git/trees/81ac19cc8ce2827e5db804b644cce0c585f6280e"
+      },
+      "url": "https://api.github.com/repos/0x676e67/wreq-util/git/commits/b9c023f4092595a014a1f7276f383ba355af02ec",
+      "comment_count": 0,
+      "verification": {
+        "verified": true,
+        "reason": "valid",
+        "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJqvWRvCRC1aQ7uu5UhlAAAOKUQAKPKvmqpRSzwCHYREcZffsq0\nxqXL9GHO6dn9ZESx7umZ6ZE/s8dNAvVvbyNbpgYNvdTZiFF0YxTwu6GIj+HNF3pF\njXWmt/apE3jbBrnOEUaRz6a5KV9+/FdZqBVHZMlbK/ij3Sse8OI+wxC5v2eZuZjx\nsseYK/mCm7hMWYTckIvcdnuLgLBA6y/wFzHzp82pHt9lhltyoufP1UgolD9PIPTC\npxp2njnzU15pPrs9vfyC3ZYIr7KG79cZjTDYfQZBlcj9Kz4+G4lWgAI9i5ox0N4/\n+yju4d2mQo/1WyFzoKNPaoGf6zHlWbHUaC1g06LL/yWfUM8WIRceqCVJMry+vls4\ng5dMwFdnE6B5z5bF2Pzsc+oVM5+Q2P6H1e9d6YPqw/06wOksi4l/7OS3stBXdjiF\nmYefbCl2wTR2eXrVgLGaFj1rVOzT/v/ur69zhgW/iof0rp1sKO0oc8C0g9izSIoz\no74Cp1Ww5Er0h8fqj3AZcOiGWKFSG/J1BvGYAe1q3Cj85ntGBvq5Pajzhru7F/Ro\nzNq0B5xvNwfF6AXRtKsClp/0fjG7r2BALjH3hsBFHV8ICVWaMbmJaSJNZ7EYNhVs\nxf8mKZM+v46OafJ4DtoKbcJUiFjpEFHh6dFlZljfr0WxedSdf0vGWMHc919ucs0p\n0URZ87Nqmp9bdxLEzAnz\n=pUYW\n-----END PGP SIGNATURE-----\n",
+        "payload": "tree 81ac19cc8ce2827e5db804b644cce0c585f6280e\nparent 5d8b65efbad14df6a4a333c81f8e0146008173cd\nauthor mune <mune3@proton.me> 1790796911 +0200\ncommitter GitHub <noreply@github.com> 1790796911 +0800\n\nfeat(emulate): add Chrome 154 (#120)",
+        "verified_at": "2026-09-30T19:35:11Z"
+      }
+    },
+    "url": "https://api.github.com/repos/0x676e67/wreq-util/commits/b9c023f4092595a014a1f7276f383ba355af02ec",
+    "html_url": "https://github.com/0x676e67/wreq-util/commit/b9c023f4092595a014a1f7276f383ba355af02ec",
+    "comments_url": "https://api.github.com/repos/0x676e67/wreq-util/commits/b9c023f4092595a014a1f7276f383ba355af02ec/comments",
+    "author": {
+      "login": "munew",
+      "id": 47749428,
+      "node_id": "MDQ6VXNlcjQ3NzQ5NDI4",
+      "avatar_url": "https://avatars.githubusercontent.com/u/47749428?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/munew",
+      "html_url": "https://github.com/munew",
+      "followers_url": "https://api.github.com/users/munew/followers",
+      "following_url": "https://api.github.com/users/munew/following{/other_user}",
+      "gists_url": "https://api.github.com/users/munew/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/munew/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/munew/subscriptions",
+      "organizations_url": "https://api.github.com/users/munew/orgs",
+      "repos_url": "https://api.github.com/users/munew/repos",
+      "events_url": "https://api.github.com/users/munew/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/munew/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "committer": {
+      "login": "web-flow",
+      "id": 19864447,
+      "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
+      "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/web-flow",
+      "html_url": "https://github.com/web-flow",
+      "followers_url": "https://api.github.com/users/web-flow/followers",
+      "following_url": "https://api.github.com/users/web-flow/following{/other_user}",
+      "gists_url": "https://api.github.com/users/web-flow/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/web-flow/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
+      "organizations_url": "https://api.github.com/users/web-flow/orgs",
+      "repos_url": "https://api.github.com/users/web-flow/repos",
+      "events_url": "https://api.github.com/users/web-flow/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/web-flow/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "parents": [
+      {
+        "sha": "5d8b65efbad14df6a4a333c81f8e0146008173cd",
+        "url": "https://api.github.com/repos/0x676e67/wreq-util/commits/5d8b65efbad14df6a4a333c81f8e0146008173cd",
+        "html_url": "https://github.com/0x676e67/wreq-util/commit/5d8b65efbad14df6a4a333c81f8e0146008173cd"
+      }
+    ]
+  },
+  {
+    "sha": "5d8b65efbad14df6a4a333c81f8e0146008173cd",
+    "node_id": "C_kwDON29_KtoAKDVkOGI2NWVmYmFkMTRkZjZhNGEzMzNjODFmOGUwMTQ2MDA4MTczY2Q",
+    "commit": {
+      "author": {
+        "name": "dependabot[bot]",
+        "email": "49699333+dependabot[bot]@users.noreply.github.com",
+        "date": "2026-09-27T17:18:28Z"
+      },
+      "committer": {
+        "name": "GitHub",
+        "email": "noreply@github.com",
+        "date": "2026-09-27T17:18:28Z"
+      },
+      "message": "build(deps): bump taiki-e/install-action from 2 to 2.85.5 (#106)\n\nBumps [taiki-e/install-action](https://github.com/taiki-e/install-action) from 2 to 2.85.5.\n- [Release notes](https://github.com/taiki-e/install-action/releases)\n- [Changelog](https://github.com/taiki-e/install-action/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/taiki-e/install-action/compare/v2...v2.85.5)\n\n---\nupdated-dependencies:\n- dependency-name: taiki-e/install-action\n  dependency-version: 2.85.5\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+      "tree": {
+        "sha": "1cd73d3146d0db479e068b553c7b447ef3647225",
+        "url": "https://api.github.com/repos/0x676e67/wreq-util/git/trees/1cd73d3146d0db479e068b553c7b447ef3647225"
+      },
+      "url": "https://api.github.com/repos/0x676e67/wreq-util/git/commits/5d8b65efbad14df6a4a333c81f8e0146008173cd",
+      "comment_count": 0,
+      "verification": {
+        "verified": true,
+        "reason": "valid",
+        "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJquU/lCRC1aQ7uu5UhlAAAlVYQAGNJvdL+fcY98XWXFc/+p83O\n+bfNKDYNhGVjJBMAKLy501KXQpMUQoyjOJLb7EEgyEg85wsgtqTZG1GF3svuvhXB\n2SyR+ADp3Y7mwMO9iTQGBK8gnw66du3jWjumCqpoWx4ICctWxcYNVcwROvzCB42l\nZ3EbQlgq8xSllaLeivSKr5SkxaxQCoW8ADFXpA5bvogp6HlyAP71ml9uEq+pPzDe\n+4HHIFk+DKkK3M3XJCZge7ceRFAQqRBhXwvegwkIiPderePf8F+xy2h0KAp0SsVD\npD7Y1o7CnxUs/7uIVpUzd4CDZMqqVL3nXm/IyWaPV+eAJ87htVoM4FBG/6WrIs0U\nE3LiDzZc+vicfC9vClbpsXQM75xnmpjg4E7EIDrSV0LE1WvHfDx1KT3+4mVCwYhy\nY0dZss7C7kegmBj6eDBlxT5LmMxS/1bT+FcRunImOus8ynGqBsZKQ0jIS/IgCnhq\no5umQ/DO4QBffKFND8WLdsv8e+av/P6o357l1OjOtXTmO7RQVhtedh+UpnCj+wbz\nHFAXxeZ6R2bElEOf18HuLzh5H19gv73EAU0sqjVErHbqY9xairxADdTVNXEprRnz\nCKYtBQg4tq+5SnGmG7m2NdE2Je2P+LYLIlIHHNWRUPn3G5NuLWMnuLm+owchcyL/\nTy+juFnH997fZuP+00n1\n=3U9m\n-----END PGP SIGNATURE-----\n",
+        "payload": "tree 1cd73d3146d0db479e068b553c7b447ef3647225\nparent be9e42a2027699ae98ae707699bdb0720ae0612d\nauthor dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> 1790529508 +0800\ncommitter GitHub <noreply@github.com> 1790529508 +0800\n\nbuild(deps): bump taiki-e/install-action from 2 to 2.85.5 (#106)\n\nBumps [taiki-e/install-action](https://github.com/taiki-e/install-action) from 2 to 2.85.5.\n- [Release notes](https://github.com/taiki-e/install-action/releases)\n- [Changelog](https://github.com/taiki-e/install-action/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/taiki-e/install-action/compare/v2...v2.85.5)\n\n---\nupdated-dependencies:\n- dependency-name: taiki-e/install-action\n  dependency-version: 2.85.5\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+        "verified_at": "2026-09-27T17:18:29Z"
+      }
+    },
+    "url": "https://api.github.com/repos/0x676e67/wreq-util/commits/5d8b65efbad14df6a4a333c81f8e0146008173cd",
+    "html_url": "https://github.com/0x676e67/wreq-util/commit/5d8b65efbad14df6a4a333c81f8e0146008173cd",
+    "comments_url": "https://api.github.com/repos/0x676e67/wreq-util/commits/5d8b65efbad14df6a4a333c81f8e0146008173cd/comments",
+    "author": {
+      "login": "dependabot[bot]",
+      "id": 49699333,
+      "node_id": "MDM6Qm90NDk2OTkzMzM=",
+      "avatar_url": "https://avatars.githubusercontent.com/in/29110?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/dependabot%5Bbot%5D",
+      "html_url": "https://github.com/apps/dependabot",
+      "followers_url": "https://api.github.com/users/dependabot%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/dependabot%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/dependabot%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/dependabot%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/dependabot%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/dependabot%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/dependabot%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/dependabot%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/dependabot%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "committer": {
+      "login": "web-flow",
+      "id": 19864447,
+      "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
+      "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/web-flow",
+      "html_url": "https://github.com/web-flow",
+      "followers_url": "https://api.github.com/users/web-flow/followers",
+      "following_url": "https://api.github.com/users/web-flow/following{/other_user}",
+      "gists_url": "https://api.github.com/users/web-flow/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/web-flow/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
+      "organizations_url": "https://api.github.com/users/web-flow/orgs",
+      "repos_url": "https://api.github.com/users/web-flow/repos",
+      "events_url": "https://api.github.com/users/web-flow/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/web-flow/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "parents": [
+      {
+        "sha": "be9e42a2027699ae98ae707699bdb0720ae0612d",
+        "url": "https://api.github.com/repos/0x676e67/wreq-util/commits/be9e42a2027699ae98ae707699bdb0720ae0612d",
+        "html_url": "https://github.com/0x676e67/wreq-util/commit/be9e42a2027699ae98ae707699bdb0720ae0612d"
+      }
+    ]
+  },
+  {
+    "sha": "be9e42a2027699ae98ae707699bdb0720ae0612d",
+    "node_id": "C_kwDON29_KtoAKGJlOWU0MmEyMDI3Njk5YWU5OGFlNzA3Njk5YmRiMDcyMGFlMDYxMmQ",
+    "commit": {
+      "author": {
+        "name": "dependabot[bot]",
+        "email": "49699333+dependabot[bot]@users.noreply.github.com",
+        "date": "2026-09-27T17:18:10Z"
+      },
+      "committer": {
+        "name": "GitHub",
+        "email": "noreply@github.com",
+        "date": "2026-09-27T17:18:10Z"
+      },
+      "message": "build(deps): update brotli requirement from 8.0.2 to 9.0.0 (#113)\n\nUpdates the requirements on [brotli](https://github.com/dropbox/rust-brotli) to permit the latest version.\n- [Release notes](https://github.com/dropbox/rust-brotli/releases)\n- [Commits](https://github.com/dropbox/rust-brotli/compare/8.0.2...9.0.0)\n\n---\nupdated-dependencies:\n- dependency-name: brotli\n  dependency-version: 9.0.0\n  dependency-type: direct:production\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+      "tree": {
+        "sha": "8a5f2c2dd3ee3d092ecf3db70bb55e1572ae57ff",
+        "url": "https://api.github.com/repos/0x676e67/wreq-util/git/trees/8a5f2c2dd3ee3d092ecf3db70bb55e1572ae57ff"
+      },
+      "url": "https://api.github.com/repos/0x676e67/wreq-util/git/commits/be9e42a2027699ae98ae707699bdb0720ae0612d",
+      "comment_count": 0,
+      "verification": {
+        "verified": true,
+        "reason": "valid",
+        "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJquU/SCRC1aQ7uu5UhlAAAdQQQAJoesR5FcWTjOeHqJb/nmRjY\n/kQSsoaxfZwkAgHaaXRvHU6GHjT8rwPnJxiJfuIJwO3nr93y6T6CZV88aTcJ4x76\nHJFE2B0nsJdBPY5hFZNa97+aIIic+T7MozLkh+zHhy6i74jNx8ZXCjDdrv5ArWmh\nN/RrBoWpkWinsXac4u/2UQtTQZ9eXu3EwpB0QCuCvztk8wYbStSlbaJal4fQYSTE\n0YJ+oPI137/NQzFQb1WzBmDRdTNRzrtYGxDaaFhvf3/uiQVVj5zPMpMtCeJyDvaR\nivUJKdhDaMmfb9LHKh4spPbIBkv+1AB0rF0rLYEYy1fgkFqyUehj0yGFEcnPUNKp\n35NxrEsjEbsw2Ko0/IQx3UowQTeq2REwZpRPF9wlJMwVjX9vmFRPZdNrfU2ieGYR\nMaWugviNHZMFvIiJLDI0nvzgFYTc8siEOn00ltcKkOUnGXmRiC/NCDK1LcSlO0u5\njQso/ue6dEeqDdFGvS/1guIsECn92PsfnMnATYmBzflu4VVaGfmsoNJRF3mGV/Hn\nx/2HhIUNaYradWjTE5fJjoDpv7Jl9c+CZOOV294EQqp1HrZ9T9NuaA9gdOmSuqoW\nMmftwMfOqmA2JuKSkJBoSW5u/gVLKyBE7/6vWLHGIjfChRssrCSucZpNTGzEryL7\ny30CE83NZFq22n37HrlX\n=YLQb\n-----END PGP SIGNATURE-----\n",
+        "payload": "tree 8a5f2c2dd3ee3d092ecf3db70bb55e1572ae57ff\nparent 94972e7ae36af08e1a92278ce8ca1e30f482a61e\nauthor dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> 1790529490 +0800\ncommitter GitHub <noreply@github.com> 1790529490 +0800\n\nbuild(deps): update brotli requirement from 8.0.2 to 9.0.0 (#113)\n\nUpdates the requirements on [brotli](https://github.com/dropbox/rust-brotli) to permit the latest version.\n- [Release notes](https://github.com/dropbox/rust-brotli/releases)\n- [Commits](https://github.com/dropbox/rust-brotli/compare/8.0.2...9.0.0)\n\n---\nupdated-dependencies:\n- dependency-name: brotli\n  dependency-version: 9.0.0\n  dependency-type: direct:production\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+        "verified_at": "2026-09-27T17:18:11Z"
+      }
+    },
+    "url": "https://api.github.com/repos/0x676e67/wreq-util/commits/be9e42a2027699ae98ae707699bdb0720ae0612d",
+    "html_url": "https://github.com/0x676e67/wreq-util/commit/be9e42a2027699ae98ae707699bdb0720ae0612d",
+    "comments_url": "https://api.github.com/repos/0x676e67/wreq-util/commits/be9e42a2027699ae98ae707699bdb0720ae0612d/comments",
+    "author": {
+      "login": "dependabot[bot]",
+      "id": 49699333,
+      "node_id": "MDM6Qm90NDk2OTkzMzM=",
+      "avatar_url": "https://avatars.githubusercontent.com/in/29110?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/dependabot%5Bbot%5D",
+      "html_url": "https://github.com/apps/dependabot",
+      "followers_url": "https://api.github.com/users/dependabot%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/dependabot%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/dependabot%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/dependabot%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/dependabot%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/dependabot%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/dependabot%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/dependabot%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/dependabot%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "committer": {
+      "login": "web-flow",
+      "id": 19864447,
+      "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
+      "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/web-flow",
+      "html_url": "https://github.com/web-flow",
+      "followers_url": "https://api.github.com/users/web-flow/followers",
+      "following_url": "https://api.github.com/users/web-flow/following{/other_user}",
+      "gists_url": "https://api.github.com/users/web-flow/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/web-flow/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
+      "organizations_url": "https://api.github.com/users/web-flow/orgs",
+      "repos_url": "https://api.github.com/users/web-flow/repos",
+      "events_url": "https://api.github.com/users/web-flow/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/web-flow/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "parents": [
+      {
+        "sha": "94972e7ae36af08e1a92278ce8ca1e30f482a61e",
+        "url": "https://api.github.com/repos/0x676e67/wreq-util/commits/94972e7ae36af08e1a92278ce8ca1e30f482a61e",
+        "html_url": "https://github.com/0x676e67/wreq-util/commit/94972e7ae36af08e1a92278ce8ca1e30f482a61e"
+      }
+    ]
+  },
+  {
+    "sha": "94972e7ae36af08e1a92278ce8ca1e30f482a61e",
+    "node_id": "C_kwDON29_KtoAKDk0OTcyZTdhZTM2YWYwOGUxYTkyMjc4Y2U4Y2ExZTMwZjQ4MmE2MWU",
+    "commit": {
+      "author": {
+        "name": "Avery L.",
+        "email": "Averyy@users.noreply.github.com",
+        "date": "2026-09-27T17:17:54Z"
+      },
+      "committer": {
+        "name": "GitHub",
+        "email": "noreply@github.com",
+        "date": "2026-09-27T17:17:54Z"
+      },
+      "message": "fix(emulate): correct broken User-Agent literals (Edge, Firefox 139, Safari 17.2.1) (#118)\n\n* fix(emulate): restore Edge 134-141 User-Agent and sec-ch-ua\n\nThe UA stopped at Chrome/NNN.0.0.0, dropping Safari/537.36 and the Edg/\ntoken, and sec-ch-ua lost its closing quote. Desktop rows now end in\nSafari/537.36 Edg/NNN.0.0.0 and Android rows in\nMobile Safari/537.36 EdgA/NNN.0.0.0, per Microsoft's UA guidance.\n\n* fix(emulate): reduce the Edg/ token in Edge 146/147\n\nDesktop rows sent the full build (Edg/146.0.3856.109). Edge sends\nEdg/MAJOR.0.0.0, as every other desktop Edge row from 122 on does.\n\n* fix(emulate): send rv:139.0 in Firefox 139 on Windows and Linux\n\nThese rows said rv:136.0 next to Firefox/139.0.\n\n* fix(emulate): fix Safari 17.2.1 and Chrome Android UA typos\n\nSafari17_2_1 sent Version/16.0, and Chrome 106-131 Android rows had\n\"(Linux: Android\" for \"(Linux; Android\".\n\n* test: check emulated User-Agent and sec-ch-ua literals\n\nLocal-server tests; they fail on the previous literals.",
+      "tree": {
+        "sha": "d99cd3e3de3af37177473be1ffab514c03d04d5b",
+        "url": "https://api.github.com/repos/0x676e67/wreq-util/git/trees/d99cd3e3de3af37177473be1ffab514c03d04d5b"
+      },
+      "url": "https://api.github.com/repos/0x676e67/wreq-util/git/commits/94972e7ae36af08e1a92278ce8ca1e30f482a61e",
+      "comment_count": 0,
+      "verification": {
+        "verified": true,
+        "reason": "valid",
+        "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJquU/CCRC1aQ7uu5UhlAAAGFIQAASLtxFfiEk46jORpjTXiUHY\nI3WM7XLsX3nzRlqXsHTast8yA7lfgWqTHtqCU1SFmh0Ws7LJ7V85hHqJXRkE4SPw\n4HgvQuKpIUqt2XlL/Rb6ct5ieIEYd7LLnXdLXKG0qrxhkQAozGMznBmROrMHE5KL\n7Qjsa9xLOxe9fOfsexbXjFeLDvB3OFKxpFwwuHQWDjjYI/JGylOTQHD9iYkV8qiW\nxORKj7A7DWPM+EgVO9zo3iyzOYDfrTJid9mB8zZRYx39fyYS5kY77REIXIvPYGC7\nXvfocFJsSMWSd2FsN1AGAZIGSO+1/QqcQSuEIQHUnyRe7bz9E5I49t/7G6uRw3B8\nDUvrryxBV8JWQmYcrgvID64PdKQF0S9hmtXsJfvxQXfBm08YCwE1waSxbskb6ueN\nKlLJj3jKdZMerysVoCtDoc2EeUPHCcEmflk7zZyeAroIKCbpj+d6bA9+L3gWDc4r\nFVvlY7EVnO3nSm9Xn0rGTWZy0rgSKXKAZwk7xLJdM1AQriR1FqXg+Df8p7oxacjt\nnqKMIlcEZF3kh97nEVZfvPSoDdfTIOHHu/1T/+8QBP86P75FQoA1pOqcHy5CHnyj\n7h0Su+Bzb0omYRTZ2OgztcyfOGK5//buY0gF+k6AciNoNv9ByPHPfu6UT9yy+bEC\nbf+AS6H6XmEK2uX45kwb\n=1SWx\n-----END PGP SIGNATURE-----\n",
+        "payload": "tree d99cd3e3de3af37177473be1ffab514c03d04d5b\nparent e3922a2b2d976487cb4cf4e7b0ac290b3ce77f66\nauthor Avery L. <Averyy@users.noreply.github.com> 1790529474 -0400\ncommitter GitHub <noreply@github.com> 1790529474 +0800\n\nfix(emulate): correct broken User-Agent literals (Edge, Firefox 139, Safari 17.2.1) (#118)\n\n* fix(emulate): restore Edge 134-141 User-Agent and sec-ch-ua\n\nThe UA stopped at Chrome/NNN.0.0.0, dropping Safari/537.36 and the Edg/\ntoken, and sec-ch-ua lost its closing quote. Desktop rows now end in\nSafari/537.36 Edg/NNN.0.0.0 and Android rows in\nMobile Safari/537.36 EdgA/NNN.0.0.0, per Microsoft's UA guidance.\n\n* fix(emulate): reduce the Edg/ token in Edge 146/147\n\nDesktop rows sent the full build (Edg/146.0.3856.109). Edge sends\nEdg/MAJOR.0.0.0, as every other desktop Edge row from 122 on does.\n\n* fix(emulate): send rv:139.0 in Firefox 139 on Windows and Linux\n\nThese rows said rv:136.0 next to Firefox/139.0.\n\n* fix(emulate): fix Safari 17.2.1 and Chrome Android UA typos\n\nSafari17_2_1 sent Version/16.0, and Chrome 106-131 Android rows had\n\"(Linux: Android\" for \"(Linux; Android\".\n\n* test: check emulated User-Agent and sec-ch-ua literals\n\nLocal-server tests; they fail on the previous literals.",
+        "verified_at": "2026-09-27T17:17:55Z"
+      }
+    },
+    "url": "https://api.github.com/repos/0x676e67/wreq-util/commits/94972e7ae36af08e1a92278ce8ca1e30f482a61e",
+    "html_url": "https://github.com/0x676e67/wreq-util/commit/94972e7ae36af08e1a92278ce8ca1e30f482a61e",
+    "comments_url": "https://api.github.com/repos/0x676e67/wreq-util/commits/94972e7ae36af08e1a92278ce8ca1e30f482a61e/comments",
+    "author": {
+      "login": "Averyy",
+      "id": 3880328,
+      "node_id": "MDQ6VXNlcjM4ODAzMjg=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/3880328?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/Averyy",
+      "html_url": "https://github.com/Averyy",
+      "followers_url": "https://api.github.com/users/Averyy/followers",
+      "following_url": "https://api.github.com/users/Averyy/following{/other_user}",
+      "gists_url": "https://api.github.com/users/Averyy/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/Averyy/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/Averyy/subscriptions",
+      "organizations_url": "https://api.github.com/users/Averyy/orgs",
+      "repos_url": "https://api.github.com/users/Averyy/repos",
+      "events_url": "https://api.github.com/users/Averyy/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/Averyy/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "committer": {
+      "login": "web-flow",
+      "id": 19864447,
+      "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
+      "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/web-flow",
+      "html_url": "https://github.com/web-flow",
+      "followers_url": "https://api.github.com/users/web-flow/followers",
+      "following_url": "https://api.github.com/users/web-flow/following{/other_user}",
+      "gists_url": "https://api.github.com/users/web-flow/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/web-flow/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
+      "organizations_url": "https://api.github.com/users/web-flow/orgs",
+      "repos_url": "https://api.github.com/users/web-flow/repos",
+      "events_url": "https://api.github.com/users/web-flow/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/web-flow/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "parents": [
+      {
+        "sha": "e3922a2b2d976487cb4cf4e7b0ac290b3ce77f66",
+        "url": "https://api.github.com/repos/0x676e67/wreq-util/commits/e3922a2b2d976487cb4cf4e7b0ac290b3ce77f66",
+        "html_url": "https://github.com/0x676e67/wreq-util/commit/e3922a2b2d976487cb4cf4e7b0ac290b3ce77f66"
+      }
+    ]
+  }
+]

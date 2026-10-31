@@ -59,14 +59,14 @@ impl wreq::dns::Resolve for SsrfGuardResolver {
 
 #[cfg(feature = "stealth")]
 pub const STEALTH_USER_AGENT: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36";
 
-/// Chrome 154's `sec-ch-ua` brand list. Chrome 148+ dropped the
+/// Chrome 156's `sec-ch-ua` brand list. Chrome 148+ dropped the
 /// `"Google Chrome";v="…"` brand that earlier versions emitted and
 /// switched to a 2-brand GREASE format. Override on hop 0 so the wire
-/// identity matches live Chrome 154 (Bloomberg/PerimeterX + WSJ/DataDome).
+/// identity matches live Chrome 156 (Bloomberg/PerimeterX + WSJ/DataDome).
 #[cfg(feature = "stealth")]
-pub const STEALTH_SEC_CH_UA: &str = "\"Not A(Brand\";v=\"99\", \"Chromium\";v=\"154\"";
+pub const STEALTH_SEC_CH_UA: &str = "\"Not A(Brand\";v=\"99\", \"Chromium\";v=\"156\"";
 
 // The wreq emulation platform must agree with navigator / sec-ch-ua-platform.
 // Private branch intentionally uses macOS: Linux Chrome is a rarer fingerprint
@@ -217,8 +217,10 @@ impl StealthHttpClient {
     }
 
     // Port of private gm/private stealth intent onto main's wreq-util API:
-    // Chrome 154 profile + macOS platform. Header overrides in fetch() keep
-    // sec-ch-ua / UA on the same Chrome 154 macOS identity (2-brand GREASE).
+    // TLS profile is the highest wreq-util ships (Chrome154). The wire
+    // identity advertises 156 because PerimeterX blocks 154 outright: the
+    // ClientHello carries no Chrome version, so the split is invisible. Header overrides in fetch() keep
+    // sec-ch-ua / UA on the same Chrome 156 macOS identity (2-brand GREASE).
     // accept-encoding is left to the emulation (emulation-compression feature
     // in Cargo.toml) so wire order stays Chrome-correct and bodies still
     // decompress. Do NOT add cache-control/pragma (DataDome fingerprint).
@@ -388,16 +390,32 @@ impl StealthHttpClient {
             validate_request_mode(&request, &current_url)?;
             let mut req = self.client.request(method.clone(), current_url.as_str());
 
-            // Version-identity overrides (private Chrome 154). Emulation still
+            // Version-identity overrides (private Chrome 156). Emulation still
             // owns accept-encoding. Do NOT add cache-control/pragma (DataDome).
             // Upstream ResourceRequest drives accept/sec-fetch/referer/cookies.
             // Navigate adds complete Chrome nav headers (priority + UIR + user).
-            // The emulation profile (Chrome154 macOS) already emits the
-            // user-agent. Adding another here would put two on the wire and
-            // the UA override path below could not replace it. The profile
-            // UA is the stealth identity, so leave it to the profile.
+            // Send the resolved UA explicitly, once. The wreq emulation
+            // profile stamps its OWN profile UA (Chrome154, the highest it
+            // ships), so any second `.header("user-agent", ..)` appends and
+            // puts two UA values on the wire. One resolution decides the
+            // value here, and the loop below skips user-agent so it cannot
+            // add another. PerimeterX reads the UA major version.
+            // Precedence: per-request header, then the client's extra headers,
+            // then an explicit --user-agent, then the stealth identity.
+            let resolved_ua = request_headers
+                .as_ref()
+                .and_then(|h| h.iter().find(|(k, _)| k.eq_ignore_ascii_case("user-agent")).map(|(_, v)| v.clone()))
+                .or_else(|| {
+                    self.extra_headers
+                        .try_read()
+                        .ok()
+                        .and_then(|h| h.iter().find(|(k, _)| k.eq_ignore_ascii_case("user-agent")).map(|(_, v)| v.clone()))
+                })
+                .or_else(|| self.user_agent.clone())
+                .unwrap_or_else(|| STEALTH_USER_AGENT.to_string());
             req = req
                 .header("sec-ch-ua", STEALTH_SEC_CH_UA)
+                .header("user-agent", resolved_ua)
                 .header("sec-ch-ua-platform", "\"macOS\"")
                 .header("accept", request.accept())
                 .header("sec-fetch-site", request_fetch_site(&request, &current_url))
@@ -433,10 +451,6 @@ impl StealthHttpClient {
             let extra_headers = self.extra_headers.read().await;
             let supplied = request_headers.as_ref();
             let effective_headers = supplied.unwrap_or(&extra_headers);
-            if let Some(ua) = effective_headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("user-agent")).map(|(_, v)| v)
-                .or(self.user_agent.as_ref()) {
-                req = req.header("user-agent", ua.as_str());
-            }
             for (k, v) in effective_headers.iter().filter(|(k, _)| !k.eq_ignore_ascii_case("user-agent")) {
                 if k.eq_ignore_ascii_case("origin") {
                     continue;
