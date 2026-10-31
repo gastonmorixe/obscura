@@ -375,7 +375,7 @@ MCP functionality.
 
 ### Anti-fingerprinting
 - Per-session fingerprint randomization (GPU, screen, canvas, audio, battery)
-- Realistic `navigator.userAgentData` (Chrome 154 macOS, 2-brand Client Hints, high-entropy values)
+- Realistic `navigator.userAgentData` (Chrome 156 macOS, 2-brand Client Hints, high-entropy values)
 - `event.isTrusted = true` for dispatched events
 - Hidden internal properties (`Object.keys(window)` safe)
 - Native function masking (`Function.prototype.toString()` → `[native code]`)

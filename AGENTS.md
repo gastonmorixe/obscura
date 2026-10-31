@@ -85,7 +85,7 @@ edit instead.
 - **obscura-js** — V8/`deno_core` runtime. `js/bootstrap.js` is the DOM/browser shim; `src/ops.rs` bridges JS to Rust DOM ops; `src/runtime.rs` owns the isolate and the per-page `ObscuraState`.
 - **obscura-dom** — DOM tree (`src/tree.rs`).
 - **obscura-ssrf** — shared SSRF / private-network URL and DNS guards used by net and fetch paths.
-- **obscura-net** — HTTP client (`client.rs`), stealth client (`wreq_client.rs`), cookie jar, `LocalStorageStore`, robots cache, tracker blocklist. Stealth wire identity is Chrome 154 macOS (`STEALTH_*` in `wreq_client.rs`).
+- **obscura-net** — HTTP client (`client.rs`), stealth client (`wreq_client.rs`), cookie jar, robots cache, tracker blocklist. Stealth wire identity is Chrome 156 macOS (`STEALTH_*` in `wreq_client.rs`).
 - **obscura-browser** — the `Page` type, navigation, JS evaluation, extension header/referrer hooks.
 - **obscura-ext** — WebExtension host (manifest, bundle, DNR, `chrome_shim.js`). Wired via `BrowserContext::with_extension`.
 - **obscura-render** — selector cascade, computed style, retained layout,
