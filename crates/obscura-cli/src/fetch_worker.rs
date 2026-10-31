@@ -239,7 +239,7 @@ impl Worker {
                 execute_fetch(id, &mut session.page, &params).await
             };
             if let Some(session) = self.sessions.get(name) {
-                session.context.save_session();
+                session.context.save_storage();
             }
             self.sequence += 1;
             if let Some(session) = self.sessions.get_mut(name) {
@@ -323,7 +323,7 @@ impl Worker {
         }
         if let Some(mut session) = self.sessions.remove(name) {
             session.page.suspend_js();
-            session.context.save_session();
+            session.context.save_storage();
             true
         } else {
             false
@@ -334,7 +334,7 @@ impl Worker {
         self.suspend_active();
         for (_, mut session) in self.sessions.drain() {
             session.page.suspend_js();
-            session.context.save_session();
+            session.context.save_storage();
         }
     }
 }
@@ -547,7 +547,7 @@ fn dump_markdown(page: &mut Page) -> String {
 
 fn dump_accessibility(page: &Page) -> String {
     let nodes = page
-        .with_dom(obscura_cdp::domains::accessibility::build_ax_nodes)
+        .with_dom(|dom| obscura_browser::accessibility::build_ax_nodes_with_styles(dom, &Default::default()))
         .unwrap_or_default();
     json!({ "nodes": nodes }).to_string()
 }

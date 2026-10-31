@@ -95,10 +95,16 @@ impl Bundle {
             if entry.is_dir() {
                 continue;
             }
-            let raw_name = entry
-                .enclosed_name()
-                .map(|p| p.to_string_lossy().replace('\\', "/"))
-                .unwrap_or_else(|| entry.name().to_string());
+            // zip 9 makes `name()` fallible: it lossily decodes the entry
+            // name from the archive. An unreadable name cannot be a bundle
+            // path, so skip the entry rather than guess.
+            let raw_name = match entry.enclosed_name() {
+                Some(path) => path.to_string_lossy().replace('\\', "/"),
+                None => match entry.name() {
+                    Ok(name) => name.replace('\\', "/"),
+                    Err(_) => continue,
+                },
+            };
             let mut buf = Vec::new();
             entry.read_to_end(&mut buf)?;
             files.insert(raw_name, buf);
@@ -253,7 +259,7 @@ mod tests {
     fn synth_zip_bytes() -> Vec<u8> {
         let mut buf = std::io::Cursor::new(Vec::new());
         let mut zip = zip::ZipWriter::new(&mut buf);
-        let opts: zip::write::FileOptions<'_, ()> =
+        let opts: zip::write::FileOptions<'_, '_, ()> =
             zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         let manifest = r#"{
             "manifest_version": 2,
@@ -278,8 +284,8 @@ mod tests {
 
     /// Write a synth bundle to a tempfile and return its path. The
     /// caller's responsibility to keep the temp dir alive.
-    fn write_synth_zip(suffix: &str) -> (tempdir::TempDir, std::path::PathBuf) {
-        let dir = tempdir::TempDir::new("obscura-ext-test").unwrap();
+    fn write_synth_zip(suffix: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::Builder::new().prefix("obscura-ext-test").tempdir().unwrap();
         let path = dir.path().join(format!("synth.{suffix}"));
         std::fs::write(&path, synth_zip_bytes()).unwrap();
         (dir, path)
@@ -320,7 +326,7 @@ mod tests {
 
     #[test]
     fn loads_synth_unpacked_directory() {
-        let dir = tempdir::TempDir::new("obscura-ext-test").unwrap();
+        let dir = tempfile::Builder::new().prefix("obscura-ext-test").tempdir().unwrap();
         std::fs::write(
             dir.path().join("manifest.json"),
             r#"{ "manifest_version": 2, "name": "Synth", "version": "1.0",
@@ -348,7 +354,7 @@ mod tests {
         crx.extend_from_slice(header);
         crx.extend_from_slice(&zip_bytes);
 
-        let dir = tempdir::TempDir::new("obscura-ext-test").unwrap();
+        let dir = tempfile::Builder::new().prefix("obscura-ext-test").tempdir().unwrap();
         let path = dir.path().join("synth.crx");
         std::fs::write(&path, &crx).unwrap();
         let bundle = Bundle::load(&path).expect("crx load");
@@ -358,7 +364,7 @@ mod tests {
 
     #[test]
     fn rejects_unknown_extension() {
-        let dir = tempdir::TempDir::new("obscura-ext-test").unwrap();
+        let dir = tempfile::Builder::new().prefix("obscura-ext-test").tempdir().unwrap();
         let path = dir.path().join("synth.tar.gz");
         std::fs::write(&path, b"not a zip").unwrap();
         assert!(matches!(
@@ -382,7 +388,7 @@ mod tests {
         fn build() -> Vec<u8> {
             let mut buf = std::io::Cursor::new(Vec::new());
             let mut zip = zip::ZipWriter::new(&mut buf);
-            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+            let opts: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default()
                 .compression_method(zip::CompressionMethod::Deflated);
             // Root manifest — the real one. Two background scripts.
             let root_manifest = r#"{
@@ -416,7 +422,7 @@ mod tests {
             buf.into_inner()
         }
 
-        let dir = tempdir::TempDir::new("obscura-ext-test").unwrap();
+        let dir = tempfile::Builder::new().prefix("obscura-ext-test").tempdir().unwrap();
         let path = dir.path().join("multi.xpi");
         std::fs::write(&path, build()).unwrap();
 

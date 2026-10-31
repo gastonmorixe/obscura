@@ -18,6 +18,39 @@
 (function () {
   "use strict";
 
+  // MV3 importScripts. Service workers load sibling scripts with this.
+  // BPC does `self.importScripts('sites.js')`, then uses `var grouped_sites`
+  // and `var defaultSites` from that file as if they were in the same scope.
+  // `new Function(src)` would hide those `var` bindings. Indirect eval runs
+  // the source in THIS function's scope (the bootstrap IIFE), which is what
+  // the background script shares. A missing file or a throw is fatal: the
+  // caller must not continue with half-imported state.
+  function importScripts() {
+    const list = [];
+    for (let k = 0; k < arguments.length; k++) {
+      const a = arguments[k];
+      if (!a) continue;
+      if (Array.isArray(a)) {
+        for (let j = 0; j < a.length; j++) if (a[j]) list.push(a[j]);
+      } else {
+        list.push(a);
+      }
+    }
+    for (let i = 0; i < list.length; i++) {
+      const p = String(list[i]).replace(/^\.\//, "").replace(/^\//, "");
+      const src = globalThis.__obscura_ext_bundle && globalThis.__obscura_ext_bundle[p];
+      if (src == null) {
+        throw new Error("obscura-ext: importScripts file not in bundle: " + p);
+      }
+      // Indirect eval: lexical scope of this function, not a new one.
+      (0, eval)(src + "\n//# sourceURL=obscura-imported:" + p);
+    }
+  }
+  globalThis.importScripts = importScripts;
+  try {
+    if (typeof self !== "undefined") self.importScripts = importScripts;
+  } catch (_) {}
+
   // ---- tiny in-realm storage backing chrome.storage.local ---------------
   // Persistence across navigations would belong on the Rust side; for our
   // single-navigation fetches, the extension's reads and writes both
@@ -118,6 +151,14 @@
   // ---- "tabs" model: Obscura has one Page per BrowserContext, so we
   //      synthesise a single tab. tabId is constant within a page lifetime.
   const TAB_ID = 1;
+  // Frame 0 is the top-level document. Content scripts that branch on
+  // sender.frameId (0 = main frame) or sender.tab.url / sender.url need a
+  // shaped sender, not just an extension id. BPC replies through
+  // sender.tab.id, so an id-only runtime.sendMessage sender leaves
+  // sender.tab undefined on the content-to-background path.
+  function _messageSender() {
+    return { id: __obscura_ext_id, tab: _currentTab(), frameId: 0, url: __obscura_ext_url };
+  }
   function _currentTab() {
     return {
       id: TAB_ID,
@@ -445,7 +486,7 @@
           msg = extensionIdOrMessage;
           cb = typeof message === "function" ? message : (typeof options === "function" ? options : callback);
         }
-        const resp = _dispatchMessage(msg, { id: __obscura_ext_id });
+        const resp = _dispatchMessage(msg, _messageSender());
         if (typeof cb === "function") Promise.resolve().then(() => cb(resp));
         return Promise.resolve(resp);
       },
@@ -485,7 +526,7 @@
       },
       sendMessage(tabId, msg, _options, cb) {
         if (typeof _options === "function" && cb === undefined) { cb = _options; }
-        const resp = _dispatchMessage(msg, { tab: _currentTab(), id: __obscura_ext_id });
+        const resp = _dispatchMessage(msg, _messageSender());
         if (typeof cb === "function") Promise.resolve().then(() => cb(resp));
         return Promise.resolve(resp);
       },
@@ -771,13 +812,10 @@
   globalThis.__obscura_ext_fire_loaded = function (url) {
     const tab = _currentTab();
     tab.url = url;
-    // changeInfo intentionally does NOT include `url`. Real-world
-    // listeners commonly gate "is this a new URL?" off changeInfo.url
-    // and use a +500ms delay when set, which is meaningless in our
-    // synchronous drain but burns a slot in the timer queue. Setting
-    // status:"complete" is the signal that triggers the listener's
-    // per-page work.
-    const changeInfo = { status: "complete" };
+    // Real Chrome includes changeInfo.url on navigation-driven updates.
+    // Listeners gate "is this a new URL?" off it, so keep the URL and
+    // status together. Synchronous drain still ignores any +500ms delay.
+    const changeInfo = { status: "complete", url: url };
     for (const fn of _onUpdatedListeners.slice()) {
       try {
         fn(tab.id, changeInfo, tab);

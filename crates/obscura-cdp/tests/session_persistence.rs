@@ -9,7 +9,7 @@
 //!   navigation target so a second run can read both cookie + localStorage
 //!   for that origin.
 //!
-//! Run 1 navigates to `/set` and lets `save_session()` flush.
+//! Run 1 navigates to `/set` and lets `save_storage()` flush.
 //! Run 2 spins up a *new* `CdpContext` pointing at the *same* `storage_dir`
 //! and verifies:
 //!   - `document.cookie` reports the cookie from run 1
@@ -157,14 +157,25 @@ async fn session_persists_cookies_and_localstorage_across_contexts() {
         );
 
         // Same single exit point the CDP server uses.
-        ctx.default_context.save_session();
+        ctx.default_context.save_storage();
     }
 
     // ── on-disk shape sanity check ──────────────────────────────────────
     let cookies_path = storage_dir.join("cookies.json");
-    let ls_path = storage_dir.join("localstorage.json");
     assert!(cookies_path.exists(), "cookies.json not written");
-    assert!(ls_path.exists(), "localstorage.json not written");
+    // localStorage is one file per origin under `{storage_dir}/localStorage/`.
+    let ls_dir = storage_dir.join("localStorage");
+    let ls_files: Vec<std::path::PathBuf> = std::fs::read_dir(&ls_dir)
+        .unwrap_or_else(|e| panic!("localStorage dir missing at {}: {e}", ls_dir.display()))
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .collect();
+    assert!(
+        !ls_files.is_empty(),
+        "no origin file under {}",
+        ls_dir.display()
+    );
 
     let cookies_raw = std::fs::read_to_string(&cookies_path).unwrap();
     assert!(
@@ -176,16 +187,30 @@ async fn session_persists_cookies_and_localstorage_across_contexts() {
         "cookies.json missing pref cookie: {cookies_raw}",
     );
 
-    let ls_raw = std::fs::read_to_string(&ls_path).unwrap();
-    let ls_json: serde_json::Value = serde_json::from_str(&ls_raw).unwrap();
-    // The origin includes the random port, so we match on the inner bucket.
-    let bucket = ls_json
-        .as_object()
-        .and_then(|o| o.values().next())
-        .and_then(|v| v.as_object())
-        .expect("localstorage.json origin bucket missing");
-    assert_eq!(bucket.get("user").and_then(|v| v.as_str()), Some("gaston"));
-    assert_eq!(bucket.get("theme").and_then(|v| v.as_str()), Some("dark"));
+    // The origin includes the random port, so match on the entry contents
+    // rather than a fixed file name.
+    let mut found_user = false;
+    let mut found_theme = false;
+    for path in &ls_files {
+        let ls_raw = std::fs::read_to_string(path).unwrap();
+        let ls_json: serde_json::Value = serde_json::from_str(&ls_raw).unwrap();
+        let entries = ls_json
+            .get("entries")
+            .and_then(|v| v.as_array())
+            .unwrap_or_else(|| panic!("origin file has no entries: {ls_raw}"));
+        for entry in entries {
+            let pair = entry.as_array().cloned().unwrap_or_default();
+            let key = pair.first().and_then(|v| v.as_str()).unwrap_or_default();
+            let value = pair.get(1).and_then(|v| v.as_str()).unwrap_or_default();
+            match (key, value) {
+                ("user", "gaston") => found_user = true,
+                ("theme", "dark") => found_theme = true,
+                _ => {}
+            }
+        }
+    }
+    assert!(found_user, "user missing from persisted localStorage");
+    assert!(found_theme, "theme missing from persisted localStorage");
 
     // ── run 2: brand-new context, same storage_dir, verify load ─────────
     {

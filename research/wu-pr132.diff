@@ -1,0 +1,217 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 0e0cba0..0af87b7 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -96,6 +96,6 @@ path = "examples/tower_delay.rs"
+ required-features = ["tower-delay"]
+ 
+ [patch.crates-io]
+-wreq = { git = "https://github.com/0x676e67/wreq", rev = "cd76bcdf1307153de289d34e072528bdf0510a3b" }
++wreq = { git = "https://github.com/0x676e67/wreq", rev = "e035a872535274933b1574a3f8bfb946d98b24dc" }
+ btls = { git = "https://github.com/0x676e67/btls", rev = "129887582a538b8f4dcf371d15c953335312ca37" }
+ btls-sys = { git = "https://github.com/0x676e67/btls", rev = "129887582a538b8f4dcf371d15c953335312ca37" }
+diff --git a/README.md b/README.md
+index a939a15..fbd599d 100644
+--- a/README.md
++++ b/README.md
+@@ -25,6 +25,12 @@ Anchor IDs and enable wreq's matching Chromium root store. A custom certificate
+ store must trust the requested anchors. The bundled roots do not provide
+ Chromium's complete certificate verification policy.
+ 
++The Chrome 156 profile targets Windows and includes a zero-byte TLS
++`server_padding` request observed in Chrome for Testing 156.0.8078.73. This
++experimental extension depends on browser configuration. The profile does not
++represent every Chrome 156 field-trial configuration, other platforms, resumed
++sessions, or HTTP/3.
++
+ ## Example
+ 
+ The following example uses the [Tokio](https://tokio.rs) runtime with optional features enabled by adding this to your `Cargo.toml`:
+diff --git a/src/emulate.rs b/src/emulate.rs
+index 54c1929..793e44c 100644
+--- a/src/emulate.rs
++++ b/src/emulate.rs
+@@ -65,6 +65,7 @@ define_enum!(
+     Chrome152 => ("chrome_152", v152::emulation),
+     Chrome153 => ("chrome_153", v153::emulation),
+     Chrome154 => ("chrome_154", v154::emulation),
++    Chrome156 => ("chrome_156", v156::emulation),
+ 
+     // Edge versions
+     Edge101 => ("edge_101", edge101::emulation),
+diff --git a/src/emulate/profile/chrome.rs b/src/emulate/profile/chrome.rs
+index 707d25c..a513637 100644
+--- a/src/emulate/profile/chrome.rs
++++ b/src/emulate/profile/chrome.rs
+@@ -1963,6 +1963,24 @@ mod_generator!(
+     ]
+ );
+ 
++// Windows capture: Chrome for Testing 156.0.8078.73, with the observed
++// AddTLSServerHandshakePadding experiment enabled.
++mod_generator!(
++    v156,
++    {
++        let mut options: TlsOptions = tls_options!(9, CURVES_3, sorted_trust_anchors());
++        options.server_padding = Some(0);
++        options
++    },
++    http2_options!(3),
++    header_initializer_chrome156,
++    [(
++        Windows,
++        r#""Not:A-Brand";v="8", "Chromium";v="156", "Google Chrome";v="156""#,
++        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
++    )]
++);
++
+ mod_generator!(
+     edge143,
+     v132::build_emulation,
+diff --git a/src/emulate/profile/chrome/header.rs b/src/emulate/profile/chrome/header.rs
+index 4304c75..dc4b6dc 100644
+--- a/src/emulate/profile/chrome/header.rs
++++ b/src/emulate/profile/chrome/header.rs
+@@ -73,6 +73,16 @@ pub fn header_initializer_with_zstd_priority(
+     headers
+ }
+ 
++pub fn header_initializer_chrome156(
++    sec_ch_ua: &'static str,
++    ua: &'static str,
++    emulation_os: Platform,
++) -> HeaderMap {
++    let mut headers = header_initializer_with_zstd_priority(sec_ch_ua, ua, emulation_os);
++    headers.insert(ACCEPT, HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"));
++    headers
++}
++
+ pub fn header_initializer_chrome152(
+     sec_ch_ua: &'static str,
+     ua: &'static str,
+diff --git a/src/emulate/profile/chrome/tls.rs b/src/emulate/profile/chrome/tls.rs
+index 5f8786e..1af1a72 100644
+--- a/src/emulate/profile/chrome/tls.rs
++++ b/src/emulate/profile/chrome/tls.rs
+@@ -247,6 +247,7 @@ mod tests {
+             crate::Profile::Chrome152,
+             crate::Profile::Chrome153,
+             crate::Profile::Chrome154,
++            crate::Profile::Chrome156,
+         ] {
+             let native = profile.into_emulation();
+             let cloned = native.clone();
+@@ -258,7 +259,10 @@ mod tests {
+                 let decoded = decode_ids(&ids);
+                 let mut expected = chromium_roots::trust_anchor_ids();
+                 expected.sort_unstable();
+-                if profile == crate::Profile::Chrome154 {
++                if matches!(
++                    profile,
++                    crate::Profile::Chrome154 | crate::Profile::Chrome156
++                ) {
+                     assert_eq!(decoded, expected);
+                 }
+                 let mut actual = decoded;
+diff --git a/tests/trust_anchors.rs b/tests/trust_anchors.rs
+index 04e71ed..62bd967 100644
+--- a/tests/trust_anchors.rs
++++ b/tests/trust_anchors.rs
+@@ -9,7 +9,12 @@ use wreq_util::Profile;
+ #[tokio::test]
+ async fn reused_native_emulation_retains_trust_anchors_on_new_connections() {
+     let request_client = Client::builder().no_proxy().build().unwrap();
+-    for profile in [Profile::Chrome152, Profile::Chrome153, Profile::Chrome154] {
++    for profile in [
++        Profile::Chrome152,
++        Profile::Chrome153,
++        Profile::Chrome154,
++        Profile::Chrome156,
++    ] {
+         let native = profile.into_emulation();
+         let expected = native
+             .tls_options
+@@ -36,9 +41,46 @@ async fn reused_native_emulation_retains_trust_anchors_on_new_connections() {
+     }
+ }
+ 
++#[tokio::test]
++async fn chrome156_server_padding_is_preserved_on_new_connections() {
++    let request_client = Client::builder().no_proxy().build().unwrap();
++    for (profile, expected) in [
++        (Profile::Chrome154, None),
++        (Profile::Chrome156, Some(vec![0, 0])),
++    ] {
++        let native = profile.into_emulation();
++        let client = Client::builder()
++            .no_proxy()
++            .emulation(native.clone())
++            .build()
++            .unwrap();
++        for _ in 0..2 {
++            assert_eq!(capture_extension(&client, None, 4832).await, expected);
++            assert_eq!(
++                capture_extension(&request_client, Some(&native), 4832).await,
++                expected
++            );
++        }
++    }
++}
++
+ // Each listener forces a new connection and closes after ClientHello. No
+ // certificate or external service is needed to inspect the extension bytes.
+ async fn capture_trust_anchors(client: &Client, native: Option<&wreq::Emulation>) -> Vec<u8> {
++    let data = capture_extension(client, native, 51764)
++        .await
++        .expect("missing trust_anchors extension");
++    let mut data = data.as_slice();
++    let ids = take_vector(&mut data, 2).to_vec();
++    assert!(data.is_empty());
++    ids
++}
++
++async fn capture_extension(
++    client: &Client,
++    native: Option<&wreq::Emulation>,
++    wanted: u16,
++) -> Option<Vec<u8>> {
+     timeout(Duration::from_secs(5), async {
+         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+             .await
+@@ -64,7 +106,7 @@ async fn capture_trust_anchors(client: &Client, native: Option<&wreq::Emulation>
+                         .iter()
+                         .fold(0usize, |n, &byte| (n << 8) | usize::from(byte));
+                     if handshake.len() >= length + 4 {
+-                        return trust_anchors_from_client_hello(&handshake[4..length + 4]);
++                        return extension_from_client_hello(&handshake[4..length + 4], wanted);
+                     }
+                 }
+             }
+@@ -77,7 +119,7 @@ async fn capture_trust_anchors(client: &Client, native: Option<&wreq::Emulation>
+     .expect("ClientHello capture timed out")
+ }
+ 
+-fn trust_anchors_from_client_hello(mut hello: &[u8]) -> Vec<u8> {
++fn extension_from_client_hello(mut hello: &[u8], wanted: u16) -> Option<Vec<u8>> {
+     take(&mut hello, 2 + 32); // Legacy version and random.
+     take_vector(&mut hello, 1); // Session ID.
+     take_vector(&mut hello, 2); // Cipher suites.
+@@ -85,14 +127,12 @@ fn trust_anchors_from_client_hello(mut hello: &[u8]) -> Vec<u8> {
+     let mut extensions = take_vector(&mut hello, 2);
+     while !extensions.is_empty() {
+         let kind = take(&mut extensions, 2);
+-        let mut data = take_vector(&mut extensions, 2);
+-        if u16::from_be_bytes([kind[0], kind[1]]) == 51764 {
+-            let ids = take_vector(&mut data, 2);
+-            assert!(data.is_empty());
+-            return ids.to_vec();
++        let data = take_vector(&mut extensions, 2);
++        if u16::from_be_bytes([kind[0], kind[1]]) == wanted {
++            return Some(data.to_vec());
+         }
+     }
+-    panic!("missing trust_anchors extension");
++    None
+ }
+ 
+ fn take<'a>(input: &mut &'a [u8], length: usize) -> &'a [u8] {

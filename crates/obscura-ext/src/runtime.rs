@@ -52,6 +52,151 @@ use crate::bundle::Bundle;
 use crate::host_match::MatchPattern;
 use crate::state::ExtensionState;
 
+/// Insert `seed` immediately after each literal `importScripts(...)` call in
+/// a background script. MV3 service workers load `defaultSites` that way, and
+/// the next statements read `storage.local` at once. A seed after the whole
+/// script is too late.
+///
+/// Only a call whose arguments are all string literals is rewritten. A dynamic
+/// call stays as a runtime `importScripts` and is not seeded here.
+fn inject_seed_after_import_scripts(src: &str, seed: &str) -> String {
+    let bytes = src.as_bytes();
+    let mut out = String::with_capacity(src.len() + seed.len());
+    let mut i = 0;
+    let mut in_squote = false;
+    let mut in_dquote = false;
+    let mut in_template = false;
+    let mut in_line = false;
+    let mut in_block = false;
+    let mut escaped = false;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if in_line {
+            out.push(c as char);
+            if c == b'\n' {
+                in_line = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_block {
+            out.push(c as char);
+            if c == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                out.push('/');
+                in_block = false;
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+        if in_squote || in_dquote || in_template {
+            out.push(c as char);
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if (in_squote && c == b'\'') || (in_dquote && c == b'"') || (in_template && c == b'`')
+            {
+                in_squote = false;
+                in_dquote = false;
+                in_template = false;
+            }
+            i += 1;
+            continue;
+        }
+        if c == b'/' && bytes.get(i + 1) == Some(&b'/') {
+            out.push('/');
+            in_line = true;
+            i += 1;
+            continue;
+        }
+        if c == b'/' && bytes.get(i + 1) == Some(&b'*') {
+            out.push('/');
+            in_block = true;
+            i += 1;
+            continue;
+        }
+        if c == b'\'' || c == b'"' || c == b'`' {
+            out.push(c as char);
+            in_squote = c == b'\'';
+            in_dquote = c == b'"';
+            in_template = c == b'`';
+            i += 1;
+            continue;
+        }
+        if src[i..].starts_with("importScripts") {
+            let after = i + "importScripts".len();
+            let rest = src[after..].trim_start();
+            let trimmed = src[after..].len() - rest.len();
+            if rest.starts_with('(') {
+                if let Some(end_rel) = matching_paren(rest) {
+                    let call_end = after + trimmed + end_rel;
+                    let args = &src[after + trimmed + 1..call_end - 1];
+                    out.push_str(&src[i..call_end]);
+                    if import_args_are_literals(args) {
+                        out.push_str(seed);
+                    }
+                    i = call_end;
+                    continue;
+                }
+            }
+        }
+        out.push(c as char);
+        i += 1;
+    }
+    out
+}
+
+fn matching_paren(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    if bytes.first() != Some(&b'(') {
+        return None;
+    }
+    let mut depth = 0i32;
+    let mut in_squote = false;
+    let mut in_dquote = false;
+    let mut escaped = false;
+    for (idx, &c) in bytes.iter().enumerate() {
+        if in_squote || in_dquote {
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if (in_squote && c == b'\'') || (in_dquote && c == b'"') {
+                in_squote = false;
+                in_dquote = false;
+            }
+            continue;
+        }
+        match c {
+            b'\'' => in_squote = true,
+            b'"' => in_dquote = true,
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(idx + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn import_args_are_literals(args: &str) -> bool {
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    trimmed.split(',').all(|part| {
+        let part = part.trim();
+        (part.starts_with('\'') && part.ends_with('\'') && part.len() >= 2)
+            || (part.starts_with('"') && part.ends_with('"') && part.len() >= 2)
+    })
+}
+
 pub struct ExtensionRuntime {
     pub bundle: Arc<Bundle>,
     pub state: Arc<ExtensionState>,
@@ -180,33 +325,47 @@ impl ExtensionRuntime {
         // global.
         let mut bg_src = String::new();
         let bg_scripts = &self.bundle.manifest.background_scripts;
-        for (i, bg) in bg_scripts.iter().enumerate() {
-            if i == bg_scripts.len().saturating_sub(1) {
-                bg_src.push_str(
-                    r#"
-// === obscura-ext: auto-enable bundled sites in storage.local ===
+        // Seed storage.local from defaultSites BEFORE the background script
+        // reads it. BPC calls storage.local.get at top level, so a seed after
+        // the script is too late: get already copied an empty sites map.
+        // MV3 loads defaultSites via importScripts('sites.js') inside the
+        // background file. Patch that call so the seed runs in the same
+        // scope, immediately after the import, still before the get.
+        let seed_js = r#"
 try {
   if (typeof defaultSites === 'object' && defaultSites) {
-    const _seed_sites = {};
-    let _seed_count = 0;
-    for (const _name of Object.keys(defaultSites)) {
-      const _info = defaultSites[_name];
-      if (_info && _info.domain && !/^(#options_|###$)/.test(_info.domain)) {
-        _seed_sites[_name] = _info.domain;
-        _seed_count++;
+    const _area = globalThis.chrome && globalThis.chrome.storage && globalThis.chrome.storage.local;
+    const _have = _area && _area._data && _area._data.sites;
+    if (_area && (!_have || Object.keys(_have).length === 0)) {
+      const _seed_sites = {};
+      let _seed_count = 0;
+      for (const _name of Object.keys(defaultSites)) {
+        const _info = defaultSites[_name];
+        if (_info && _info.domain && !/^(#options_|###$)/.test(_info.domain)) {
+          _seed_sites[_name] = _info.domain;
+          _seed_count++;
+        }
       }
+      _area._data.sites = _seed_sites;
+      _area._data.optIn = false;
+      _area._data.optInFetch = false;
+      _area._data.optInUpdate = false;
+      console.log("obscura-ext: auto-enabled " + _seed_count + " bundled sites");
     }
-    globalThis.chrome.storage.local._data.sites = _seed_sites;
-    globalThis.chrome.storage.local._data.optIn = false;
-    globalThis.chrome.storage.local._data.optInFetch = false;
-    globalThis.chrome.storage.local._data.optInUpdate = false;
-    console.log("obscura-ext: auto-enabled " + _seed_count + " bundled sites");
   }
 } catch (e) { console.error("obscura-ext: auto-enable failed:", e && e.stack || e); }
-"#,
-                );
+"#;
+        for (i, bg) in bg_scripts.iter().enumerate() {
+            if i == bg_scripts.len().saturating_sub(1) && bg_scripts.len() > 1 {
+                // MV2: an earlier background file already declared defaultSites.
+                bg_src.push_str(seed_js);
             }
             if let Some(text) = self.bundle.get_text(bg) {
+                let text = if i == bg_scripts.len().saturating_sub(1) {
+                    inject_seed_after_import_scripts(&text, seed_js)
+                } else {
+                    text
+                };
                 bg_src.push_str(&format!("\n// === bundle: {bg} ===\n"));
                 bg_src.push_str(&text);
                 bg_src.push('\n');
@@ -331,7 +490,7 @@ mod tests {
     use super::*;
 
     fn runtime_for(host_pattern: &str) -> ExtensionRuntime {
-        let dir = tempdir::TempDir::new("obscura-ext-rt-test").unwrap();
+        let dir = tempfile::Builder::new().prefix("obscura-ext-rt-test").tempdir().unwrap();
         std::fs::write(
             dir.path().join("manifest.json"),
             format!(
@@ -390,6 +549,34 @@ mod tests {
         assert_eq!(rt.ingest_dnr_rules_json("not json"), 0);
         assert_eq!(rt.ingest_dnr_rules_json("[]"), 0);
         assert_eq!(rt.ingest_dnr_rules_json("{}"), 0);
+    }
+
+    #[test]
+    fn seed_lands_after_literal_import_scripts() {
+        let src = "if (mv === 3) {\n  self.importScripts('sites.js');\n  use(grouped_sites);\n}\n";
+        let out = inject_seed_after_import_scripts(src, "SEED();");
+        assert!(
+            out.contains("importScripts('sites.js')"),
+            "rewritten source lost the call: {out}"
+        );
+        let import_at = out.find("importScripts('sites.js')").unwrap();
+        let seed_at = out.find("SEED();").unwrap();
+        let use_at = out.find("use(grouped_sites)").unwrap();
+        assert!(import_at < seed_at && seed_at < use_at);
+    }
+
+    #[test]
+    fn dynamic_import_scripts_is_not_rewritten() {
+        let src = "importScripts(name);";
+        let out = inject_seed_after_import_scripts(src, "SEED();");
+        assert_eq!(out, src);
+    }
+
+    #[test]
+    fn import_scripts_inside_a_string_is_not_rewritten() {
+        let src = "var s = \"importScripts('sites.js')\";\n";
+        let out = inject_seed_after_import_scripts(src, "SEED();");
+        assert_eq!(out, src);
     }
 
     #[test]

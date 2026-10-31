@@ -2,12 +2,15 @@
 name = "obscura-net"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [features]
 default = []
-stealth = ["wreq", "wreq-util"]
+stealth = ["wreq", "wreq-util", "futures-util"]
 
 [dependencies]
+obscura-ssrf = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
@@ -18,11 +21,17 @@ thiserror = { workspace = true }
 async-trait = "0.1"
 encoding_rs = "0.8"
 tempfile = "3"
-# wreq and wreq-util are pre-release crates whose API changes between rc builds
-# (CertStore moved out of `tls`, `cert_store` renamed to `tls_cert_store`, the
-# Emulation builder reshuffled). A caret requirement let a fresh resolve pull a
-# newer, incompatible rc and broke `cargo build --features stealth` (issue #234).
-# Pin exact versions so the build always resolves to the API wreq_client.rs targets.
+psl = "2"
+futures-util = { version = "0.3", optional = true }
+# wreq / wreq-util were reset from the 6.0.0-rc / 3.0.0-rc line onto 0.16 / 0.2
+# (upstream release-plz baseline reset). Pin exact versions so a caret cannot
+# pull an incompatible build and break `cargo build --features stealth`
+# (issue #234).
+#
+# crates.io wreq-util 0.2.0 only ships Profile::Chrome149. Chrome150-154 live
+# on upstream main (PR #107/#112/#120) and are not published yet, so pin a
+# git rev that exposes Chrome154. Workspace [patch.crates-io] redirects wreq
+# 0.16.1 to upstream git (trust_anchors / grease_sigalgs_enabled for Chrome152+).
 #
 # `emulation-compression` makes wreq-util's Chrome emulation emit the
 # `accept-encoding` request header in its native position (right after
@@ -32,7 +41,17 @@ tempfile = "3"
 # scores its absence and serves the CAPTCHA interstitial. Must be paired with
 # wreq's decode features below so the advertised encodings are actually
 # decompressed (see issue: WSJ/DataDome block).
-wreq-util = { version = "=3.0.0-rc.12", optional = true, features = ["emulation-compression"] }
+wreq-util = { git = "https://github.com/0x676e67/wreq-util", rev = "4d21e3b65d6846187e02802172073438944e6399", optional = true, features = ["emulation-compression"] }
+
+[dev-dependencies]
+socket2 = "0.6"
+# TLS fixtures for the configured-roots tests: rcgen mints a throwaway CA + leaf,
+# tokio-rustls serves one HTTPS response with them. Pinned to the ring
+# provider so the test binary has a single rustls CryptoProvider (reqwest's
+# rustls also uses ring; adding aws-lc-rs would make provider auto-selection
+# panic).
+rcgen = "0.13"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 
 # `prefix-symbols` renames BoringSSL exports to avoid clashes with system OpenSSL,
 # but the renaming is only correct on Linux and Android (per wreq's README).
@@ -47,7 +66,7 @@ wreq-util = { version = "=3.0.0-rc.12", optional = true, features = ["emulation-
 # decoder in lockstep.
 # `socks` is required for stealth + SOCKS5 proxy support (upstream).
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
-wreq = { version = "=6.0.0-rc.29", optional = true, features = ["prefix-symbols", "socks", "gzip", "brotli", "deflate", "zstd"] }
+wreq = { version = "=0.16.1", optional = true, features = ["prefix-symbols", "socks", "stream", "gzip", "brotli", "deflate", "zstd"] }
 
 [target.'cfg(not(any(target_os = "linux", target_os = "android")))'.dependencies]
-wreq = { version = "=6.0.0-rc.29", optional = true, features = ["socks", "gzip", "brotli", "deflate", "zstd"] }
+wreq = { version = "=0.16.1", optional = true, features = ["socks", "stream", "gzip", "brotli", "deflate", "zstd"] }

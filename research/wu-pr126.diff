@@ -1,0 +1,112 @@
+diff --git a/README.md b/README.md
+index a939a15..799477f 100644
+--- a/README.md
++++ b/README.md
+@@ -25,6 +25,8 @@ Anchor IDs and enable wreq's matching Chromium root store. A custom certificate
+ store must trust the requested anchors. The bundled roots do not provide
+ Chromium's complete certificate verification policy.
+ 
++The Chrome 155 profile currently targets Windows and shares Chrome 154's TLS/HTTP2 configuration.
++
+ ## Example
+ 
+ The following example uses the [Tokio](https://tokio.rs) runtime with optional features enabled by adding this to your `Cargo.toml`:
+diff --git a/src/emulate.rs b/src/emulate.rs
+index 54c1929..fc1d507 100644
+--- a/src/emulate.rs
++++ b/src/emulate.rs
+@@ -65,6 +65,7 @@ define_enum!(
+     Chrome152 => ("chrome_152", v152::emulation),
+     Chrome153 => ("chrome_153", v153::emulation),
+     Chrome154 => ("chrome_154", v154::emulation),
++    Chrome155 => ("chrome_155", v155::emulation),
+ 
+     // Edge versions
+     Edge101 => ("edge_101", edge101::emulation),
+diff --git a/src/emulate/profile/chrome.rs b/src/emulate/profile/chrome.rs
+index 707d25c..eccfc2b 100644
+--- a/src/emulate/profile/chrome.rs
++++ b/src/emulate/profile/chrome.rs
+@@ -1963,6 +1963,18 @@ mod_generator!(
+     ]
+ );
+ 
++mod_generator!(
++    v155,
++    tls_options!(9, CURVES_3, sorted_trust_anchors()),
++    http2_options!(3),
++    header_initializer_chrome155,
++    [(
++        Windows,
++        r#""Google Chrome";v="155", "Chromium";v="155", "Not(A:Brand";v="24""#,
++        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
++    )]
++);
++
+ mod_generator!(
+     edge143,
+     v132::build_emulation,
+diff --git a/src/emulate/profile/chrome/header.rs b/src/emulate/profile/chrome/header.rs
+index 4304c75..9b1a4bb 100644
+--- a/src/emulate/profile/chrome/header.rs
++++ b/src/emulate/profile/chrome/header.rs
+@@ -73,6 +73,17 @@ pub fn header_initializer_with_zstd_priority(
+     headers
+ }
+ 
++// Windows Chrome 155 navigation headers; TLS/H2 parameters are shared with 154.
++pub fn header_initializer_chrome155(
++    sec_ch_ua: &'static str,
++    ua: &'static str,
++    emulation_os: Platform,
++) -> HeaderMap {
++    let mut headers = header_initializer_with_zstd_priority(sec_ch_ua, ua, emulation_os);
++    headers.insert(ACCEPT, HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"));
++    headers
++}
++
+ pub fn header_initializer_chrome152(
+     sec_ch_ua: &'static str,
+     ua: &'static str,
+diff --git a/src/emulate/profile/chrome/tls.rs b/src/emulate/profile/chrome/tls.rs
+index 5f8786e..c997d6a 100644
+--- a/src/emulate/profile/chrome/tls.rs
++++ b/src/emulate/profile/chrome/tls.rs
+@@ -247,6 +247,7 @@ mod tests {
+             crate::Profile::Chrome152,
+             crate::Profile::Chrome153,
+             crate::Profile::Chrome154,
++            crate::Profile::Chrome155,
+         ] {
+             let native = profile.into_emulation();
+             let cloned = native.clone();
+@@ -258,7 +259,10 @@ mod tests {
+                 let decoded = decode_ids(&ids);
+                 let mut expected = chromium_roots::trust_anchor_ids();
+                 expected.sort_unstable();
+-                if profile == crate::Profile::Chrome154 {
++                if matches!(
++                    profile,
++                    crate::Profile::Chrome154 | crate::Profile::Chrome155
++                ) {
+                     assert_eq!(decoded, expected);
+                 }
+                 let mut actual = decoded;
+diff --git a/tests/trust_anchors.rs b/tests/trust_anchors.rs
+index 04e71ed..2a01d5f 100644
+--- a/tests/trust_anchors.rs
++++ b/tests/trust_anchors.rs
+@@ -9,7 +9,12 @@ use wreq_util::Profile;
+ #[tokio::test]
+ async fn reused_native_emulation_retains_trust_anchors_on_new_connections() {
+     let request_client = Client::builder().no_proxy().build().unwrap();
+-    for profile in [Profile::Chrome152, Profile::Chrome153, Profile::Chrome154] {
++    for profile in [
++        Profile::Chrome152,
++        Profile::Chrome153,
++        Profile::Chrome154,
++        Profile::Chrome155,
++    ] {
+         let native = profile.into_emulation();
+         let expected = native
+             .tls_options

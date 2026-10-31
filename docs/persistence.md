@@ -11,9 +11,10 @@ against the same directory comes back logged in.
 | Surface | Persisted? | Why / why not |
 | --- | --- | --- |
 | HTTP cookies (jar) | yes | `cookies.json`. Domain-scoped, same wire format as a Chrome cookie export. |
-| `localStorage` | yes | `localstorage.json`. Per-origin (`scheme://host[:port]`). |
-| `sessionStorage` | no  | Real browsers don't persist it either. In-memory per V8 isolate. |
-| IndexedDB / `caches` | no | Bigger surface (B-trees, cursors, transactions). On the roadmap. |
+| `localStorage` | yes | One file per origin under `localStorage/`. Keyed by `scheme://host[:port]`. |
+| `sessionStorage` | no  | Real browsers don't persist it either. Lives on the `Page`, keyed by origin, so it survives a same-origin navigation and dies with the tab. |
+| IndexedDB | no  | In memory for the context lifetime. Not written to disk. |
+| `caches` | no | Not implemented. |
 | Service workers | no | Not emulated. |
 | `chrome.storage.local` (extensions) | no | Stub remains in-memory per page. |
 
@@ -26,7 +27,8 @@ language under *Browser extensions*.
 ```
 $STORAGE_DIR/
   cookies.json
-  localstorage.json
+  localStorage/
+    https___example.com-837b2b5793a240b3.json
 ```
 
 ### `cookies.json`
@@ -50,28 +52,37 @@ sameSite, expires }` records. Same shape as
 ]
 ```
 
-### `localstorage.json`
+### `localStorage/<stem>.json`
 
-JSON object keyed by canonical origin (`scheme://host[:port]`), each
-value an object of `{ key: value }` string pairs. The origin form
-matches `url::Origin::ascii_serialization()` — default ports are
-elided (`https://example.com` not `https://example.com:443`).
+One file per origin. The stem is a readable prefix plus a 64-bit FNV-1a
+digest of the origin, so two origins that sanitize to the same prefix
+cannot share a file.
 
 ```json
 {
-  "https://gooseup.me": {
-    "user_pref": "dark",
-    "last_seen": "2026-05-28T15:42:00Z"
-  },
-  "https://twitter.com": {
-    "device_id": "abc123"
-  }
+  "origin": "https://gooseup.me",
+  "entries": [
+    ["user_pref", "dark"],
+    ["last_seen", "2026-05-28T15:42:00Z"]
+  ]
 }
 ```
 
-Opaque origins (`about:blank`, `data:` URIs, unparseable URLs) are
-never written, matching browser behaviour where those pages don't get
-a "real" localStorage either.
+`entries` is an ordered list because `Storage.key(i)` depends on insertion
+order. The origin is stored inside the file and validated on load: it must
+match `url::Origin::ascii_serialization()`, or be `file://`.
+
+Opaque origins (`about:blank`, `data:` URIs, unparseable URLs) are never
+written. Reading `localStorage` there throws `SecurityError`, as in a real
+browser.
+
+### Upgrading from the single-file layout
+
+Profiles written before the per-origin split hold one
+`$STORAGE_DIR/localstorage.json` mapping `{ origin: { key: value } }`.
+On load, if that file is present it is adopted into the per-origin store
+once, with an `info!` log line, and left on disk so a downgrade still finds
+its data.
 
 ## Write semantics
 
@@ -102,49 +113,24 @@ and writes `Set-Cookie` responses back. `document.cookie` getter and
 setter go through `op_get_cookies` / `op_set_cookie` (which dispatch
 to the same jar's `get_js_visible_cookies` / `set_cookie_from_js`).
 
-### `localStorage`
+### `localStorage` and `sessionStorage`
 
-`obscura_net::LocalStorageStore` is an `RwLock<HashMap<origin,
-HashMap<key, value>>>` (see
-[`crates/obscura-net/src/localstorage.rs`][ls]). The bootstrap shim
-in `crates/obscura-js/js/bootstrap.js` exposes
-`globalThis.localStorage` as a `Proxy` over a `Storage.prototype`
-core whose methods dispatch to six V8 ops:
+`obscura_js::ops::OriginStorage` holds one origin's entries behind a lock,
+keyed by canonical origin. The context owns the `localStorage` instance, so it
+outlives a V8 realm. The `Page` owns `sessionStorage`, so it survives a
+same-origin navigation and dies with the tab.
 
-```
-op_localstorage_get_item(key) -> JSON("null" | string)
-op_localstorage_set_item(key, value)
-op_localstorage_remove_item(key)
-op_localstorage_clear()
-op_localstorage_length() -> u32
-op_localstorage_key(index) -> JSON("null" | string)
-```
-
-Each op reads the current page URL from `ObscuraState.url`, derives
-the canonical origin via `url::Origin::ascii_serialization()`, and
-routes through the per-`BrowserContext` `Arc<LocalStorageStore>`.
-The Proxy wraps the core so property access (`localStorage.foo`,
-`'foo' in localStorage`, `delete localStorage.foo`,
-`Object.keys(localStorage)`) all work.
-
-[ls]: ../crates/obscura-net/src/localstorage.rs
-
-### Why a `Proxy` (and not plain methods)
-
-Real-world sites do `localStorage.foo = 'bar'` and
-`for (const k of Object.keys(localStorage))`. Without a `Proxy`
-those don't dispatch through `getItem` / `setItem` — they hit the
-underlying JS object directly. With the `Proxy` the `get`, `set`,
-`has`, `deleteProperty`, `ownKeys`, and `getOwnPropertyDescriptor`
-traps all route through the ops while the method names (`getItem`,
-`setItem`, etc.) are pass-through.
+`bootstrap.js` exposes both as a `Proxy` over a `Storage.prototype` core. The
+core reads and writes through the host bridge, so a property write
+(`localStorage.theme = "dark"`) and `setItem` take the same path. A write to an
+opaque origin throws `SecurityError` rather than silently doing nothing.
 
 ## Example: logged-in scrape
 
 ```bash
 # Run 1: log in. The form submits via op_navigate (POST), the
 # server's Set-Cookie response lands in the jar, and the CLI
-# drains pending navigation before save_session() runs.
+# drains pending navigation before save_storage() runs.
 obscura fetch https://gooseup.me/ --storage-dir ./session --eval '
   const f = document.querySelector("form[action=\"/auth/login\"]");
   f.querySelector("input[name=\"username\"]").value = "gaston";
@@ -183,12 +169,13 @@ round-trip across two separate `CdpContext` instances.
   JS can't see the cookie via `document.cookie`. It does NOT mean
   the cookie isn't in the file you handed obscura.
 
-## Compatibility note
+## Flushing to disk
 
-The existing `BrowserContext::save_cookies()` API is now a
-`#[deprecated]` alias for `save_session()`, which writes both files.
-External callers keep compiling; new code should prefer the new
-name.
+`BrowserContext::save_storage()` writes `localStorage` and cookies.
+`save_local_storage()` and `save_cookies()` write one half each. The CLI calls
+`save_storage()` on every exit path that owns a context, and the CDP server and
+MCP `browser_close` do the same. Only origins whose entries changed since the
+last flush are rewritten.
 
 ## Deferred / known gaps
 

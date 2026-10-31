@@ -4,10 +4,10 @@ pub async fn handle(method: &str, _params: &Value) -> Result<Value, String> {
     match method {
         "getVersion" => Ok(json!({
             "protocolVersion": "1.3",
-            "product": "Chrome/145.0.0.0",
+            "product": "Chrome/156.0.0.0",
             "revision": "@0000000000000000000000000000000000000000",
-            "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
-            "jsVersion": "14.5.0.0",
+            "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+            "jsVersion": "15.4.0.0",
         })),
         "close" => {
             Ok(json!({}))
@@ -31,6 +31,12 @@ pub async fn handle(method: &str, _params: &Value) -> Result<Value, String> {
         // lets the client's setup sequence complete instead of tearing down
         // the page on an unknown-method error.
         "setWindowBounds" => Ok(json!({})),
+        // Playwright grants permissions (geolocation, notifications, ...) per
+        // browser context during setup. obscura does not gate any API on a
+        // permission grant today, so the honest answer is to accept and
+        // remember nothing; an unknown-method error would abort the client's
+        // whole context initialization.
+        "grantPermissions" | "resetPermissions" => Ok(json!({})),
         _ => Err(format!("Unknown Browser method: {}", method)),
     }
 }

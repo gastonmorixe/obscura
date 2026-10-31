@@ -1,0 +1,125 @@
+{
+  "sha": "e035a872535274933b1574a3f8bfb946d98b24dc",
+  "node_id": "C_kwDOM0DT_NoAKGUwMzVhODcyNTM1Mjc0OTMzYjE1NzRhM2Y4YmZiOTQ2ZDk4YjI0ZGM",
+  "commit": {
+    "author": {
+      "name": "knewstimek",
+      "email": "58800634+knewstimek@users.noreply.github.com",
+      "date": "2026-10-29T15:01:27Z"
+    },
+    "committer": {
+      "name": "knewstimek",
+      "email": "58800634+knewstimek@users.noreply.github.com",
+      "date": "2026-10-29T15:01:27Z"
+    },
+    "message": "feat(tls): expose optional server padding requests",
+    "tree": {
+      "sha": "abcd0ff54693214be99d1d86ab5273469a227fe6",
+      "url": "https://api.github.com/repos/0x676e67/wreq/git/trees/abcd0ff54693214be99d1d86ab5273469a227fe6"
+    },
+    "url": "https://api.github.com/repos/0x676e67/wreq/git/commits/e035a872535274933b1574a3f8bfb946d98b24dc",
+    "comment_count": 0,
+    "verification": {
+      "verified": false,
+      "reason": "unsigned",
+      "signature": null,
+      "payload": null,
+      "verified_at": null
+    }
+  },
+  "url": "https://api.github.com/repos/0x676e67/wreq/commits/e035a872535274933b1574a3f8bfb946d98b24dc",
+  "html_url": "https://github.com/0x676e67/wreq/commit/e035a872535274933b1574a3f8bfb946d98b24dc",
+  "comments_url": "https://api.github.com/repos/0x676e67/wreq/commits/e035a872535274933b1574a3f8bfb946d98b24dc/comments",
+  "author": {
+    "login": "knewstimek",
+    "id": 58800634,
+    "node_id": "MDQ6VXNlcjU4ODAwNjM0",
+    "avatar_url": "https://avatars.githubusercontent.com/u/58800634?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/knewstimek",
+    "html_url": "https://github.com/knewstimek",
+    "followers_url": "https://api.github.com/users/knewstimek/followers",
+    "following_url": "https://api.github.com/users/knewstimek/following{/other_user}",
+    "gists_url": "https://api.github.com/users/knewstimek/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/knewstimek/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/knewstimek/subscriptions",
+    "organizations_url": "https://api.github.com/users/knewstimek/orgs",
+    "repos_url": "https://api.github.com/users/knewstimek/repos",
+    "events_url": "https://api.github.com/users/knewstimek/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/knewstimek/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "committer": {
+    "login": "knewstimek",
+    "id": 58800634,
+    "node_id": "MDQ6VXNlcjU4ODAwNjM0",
+    "avatar_url": "https://avatars.githubusercontent.com/u/58800634?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/knewstimek",
+    "html_url": "https://github.com/knewstimek",
+    "followers_url": "https://api.github.com/users/knewstimek/followers",
+    "following_url": "https://api.github.com/users/knewstimek/following{/other_user}",
+    "gists_url": "https://api.github.com/users/knewstimek/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/knewstimek/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/knewstimek/subscriptions",
+    "organizations_url": "https://api.github.com/users/knewstimek/orgs",
+    "repos_url": "https://api.github.com/users/knewstimek/repos",
+    "events_url": "https://api.github.com/users/knewstimek/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/knewstimek/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "parents": [
+    {
+      "sha": "d9ef3083565504635eb0a09eaac794c3cdb0fc0e",
+      "url": "https://api.github.com/repos/0x676e67/wreq/commits/d9ef3083565504635eb0a09eaac794c3cdb0fc0e",
+      "html_url": "https://github.com/0x676e67/wreq/commit/d9ef3083565504635eb0a09eaac794c3cdb0fc0e"
+    }
+  ],
+  "stats": {
+    "total": 142,
+    "additions": 141,
+    "deletions": 1
+  },
+  "files": [
+    {
+      "sha": "b7b9e1aaaae70ea19fb86fd46e473f2fe052a948",
+      "filename": "src/tls.rs",
+      "status": "modified",
+      "additions": 22,
+      "deletions": 0,
+      "changes": 22,
+      "blob_url": "https://github.com/0x676e67/wreq/blob/e035a872535274933b1574a3f8bfb946d98b24dc/src%2Ftls.rs",
+      "raw_url": "https://github.com/0x676e67/wreq/raw/e035a872535274933b1574a3f8bfb946d98b24dc/src%2Ftls.rs",
+      "contents_url": "https://api.github.com/repos/0x676e67/wreq/contents/src%2Ftls.rs?ref=e035a872535274933b1574a3f8bfb946d98b24dc",
+      "patch": "@@ -256,6 +256,15 @@ pub struct TlsOptions {\n     /// [`trust_anchors` extension]: https://datatracker.ietf.org/doc/html/draft-ietf-tls-trust-anchor-ids-04#section-4.1\n     pub trust_anchors: Option<Cow<'static, [u8]>>,\n \n+    /// Requests TLS 1.3 EncryptedExtensions padding from the server.\n+    ///\n+    /// `Some(0)` sends the experimental `server_padding` extension (4832) with\n+    /// a zero-byte padding request; `None` omits the extension. Servers may ignore\n+    /// the request and only honor padding requests of at most 16 KiB.\n+    ///\n+    /// **Default:** `None`\n+    pub server_padding: Option<u16>,\n+\n     /// Enables TLS renegotiation by sending the `renegotiation_info` extension.\n     ///\n     /// **Default:** `true`\n@@ -485,6 +494,18 @@ impl TlsOptionsBuilder {\n         self\n     }\n \n+    /// Sets the requested TLS 1.3 server padding, or disables the extension.\n+    ///\n+    /// See [`TlsOptions::server_padding`] for the experimental extension's behavior.\n+    #[inline]\n+    pub fn server_padding<T>(mut self, num_bytes: T) -> Self\n+    where\n+        T: Into<Option<u16>>,\n+    {\n+        self.config.server_padding = num_bytes.into();\n+        self\n+    }\n+\n     /// Sets the supported curves list.\n     #[inline]\n     pub fn curves_list<T>(mut self, curves: T) -> Self\n@@ -607,6 +628,7 @@ impl Default for TlsOptions {\n             record_size_limit: None,\n             key_shares: None,\n             trust_anchors: None,\n+            server_padding: None,\n             psk_dhe_ke: true,\n             pre_shared_key: false,\n             psk_skip_session_ticket: false,"
+    },
+    {
+      "sha": "b0e50cb7a1d8747726831fd22931d20f9d04c274",
+      "filename": "src/tls/conn.rs",
+      "status": "modified",
+      "additions": 7,
+      "deletions": 1,
+      "changes": 8,
+      "blob_url": "https://github.com/0x676e67/wreq/blob/e035a872535274933b1574a3f8bfb946d98b24dc/src%2Ftls%2Fconn.rs",
+      "raw_url": "https://github.com/0x676e67/wreq/raw/e035a872535274933b1574a3f8bfb946d98b24dc/src%2Ftls%2Fconn.rs",
+      "contents_url": "https://api.github.com/repos/0x676e67/wreq/contents/src%2Ftls%2Fconn.rs?ref=e035a872535274933b1574a3f8bfb946d98b24dc",
+      "patch": "@@ -53,6 +53,7 @@ pub struct HandshakeSettings {\n     alps_use_new_codepoint: bool,\n     key_shares: Option<Cow<'static, [KeyShare]>>,\n     random_aes_hw_override: bool,\n+    server_padding: Option<u16>,\n }\n \n /// A Connector using BoringSSL to support `http` and `https` schemes.\n@@ -215,7 +216,11 @@ impl TlsConnector {\n             cfg.set_ex_data(idx, key);\n         }\n \n-        Ok(cfg.into_ssl(host)?)\n+        let mut ssl = cfg.into_ssl(host)?;\n+        if let Some(num_bytes) = self.settings.server_padding {\n+            ssl.set_server_padding_request(num_bytes);\n+        }\n+        Ok(ssl)\n     }\n \n     /// If `host` is an IPv6 address, we must strip away the square brackets that surround\n@@ -461,6 +466,7 @@ impl TlsConnectorBuilder {\n             enable_ech_grease: opts.enable_ech_grease,\n             key_shares: opts.key_shares.clone(),\n             random_aes_hw_override: opts.random_aes_hw_override,\n+            server_padding: opts.server_padding,\n         };\n \n         // If the session cache is disabled, we don't need to set up any callbacks."
+    },
+    {
+      "sha": "18352d2a9bb0e63af04afb807ca77c8864ffd8ee",
+      "filename": "tests/server_padding.rs",
+      "status": "added",
+      "additions": 112,
+      "deletions": 0,
+      "changes": 112,
+      "blob_url": "https://github.com/0x676e67/wreq/blob/e035a872535274933b1574a3f8bfb946d98b24dc/tests%2Fserver_padding.rs",
+      "raw_url": "https://github.com/0x676e67/wreq/raw/e035a872535274933b1574a3f8bfb946d98b24dc/tests%2Fserver_padding.rs",
+      "contents_url": "https://api.github.com/repos/0x676e67/wreq/contents/tests%2Fserver_padding.rs?ref=e035a872535274933b1574a3f8bfb946d98b24dc",
+      "patch": "@@ -0,0 +1,112 @@\n+#![cfg(all(feature = \"tokio-rt\", not(target_arch = \"wasm32\")))]\n+\n+use std::time::Duration;\n+\n+use tokio::{io::AsyncReadExt, net::TcpListener, time::timeout};\n+use wreq::{Client, Emulation, Group, tls::TlsOptions};\n+\n+#[tokio::test]\n+async fn server_padding_is_optional_and_survives_emulation_reuse() {\n+    let request_client = Client::builder().no_proxy().build().unwrap();\n+    for requested in [None, Some(0), Some(1024)] {\n+        let options = match requested {\n+            Some(bytes) => TlsOptions::builder().server_padding(bytes).build(),\n+            None => TlsOptions::default(),\n+        };\n+        let native = Emulation::builder()\n+            .tls_options(options)\n+            .build(Group::new(\"server-padding-test\"));\n+        let client = Client::builder()\n+            .no_proxy()\n+            .emulation(native.clone())\n+            .build()\n+            .unwrap();\n+        let expected = requested.map(|bytes| u16::to_be_bytes(bytes).to_vec());\n+        for _ in 0..2 {\n+            assert_eq!(capture_server_padding(&client, None).await, expected);\n+            assert_eq!(\n+                capture_server_padding(&request_client, Some(&native)).await,\n+                expected\n+            );\n+        }\n+    }\n+}\n+\n+#[test]\n+fn server_padding_can_be_disabled_after_configuration() {\n+    let options = TlsOptions::builder()\n+        .server_padding(1024)\n+        .server_padding(None)\n+        .build();\n+    assert_eq!(options.server_padding, None);\n+}\n+\n+// Close after ClientHello; inspecting the extension needs no certificate or\n+// external service and exercises both client-wide and per-request emulation.\n+async fn capture_server_padding(client: &Client, native: Option<&Emulation>) -> Option<Vec<u8>> {\n+    timeout(Duration::from_secs(5), async {\n+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))\n+            .await\n+            .unwrap();\n+        let mut request = client.get(format!(\"https://{}/\", listener.local_addr().unwrap()));\n+        if let Some(native) = native {\n+            request = request.emulation(native.clone());\n+        }\n+        let capture = async {\n+            let (mut socket, _) = listener.accept().await.unwrap();\n+            let mut handshake = Vec::new();\n+            loop {\n+                let mut header = [0; 5];\n+                socket.read_exact(&mut header).await.unwrap();\n+                assert_eq!(header[0], 22, \"expected a TLS handshake record\");\n+                let length = usize::from(u16::from_be_bytes([header[3], header[4]]));\n+                let offset = handshake.len();\n+                handshake.resize(offset + length, 0);\n+                socket.read_exact(&mut handshake[offset..]).await.unwrap();\n+                if handshake.len() >= 4 {\n+                    assert_eq!(handshake[0], 1, \"expected ClientHello\");\n+                    let length = handshake[1..4]\n+                        .iter()\n+                        .fold(0usize, |n, &byte| (n << 8) | usize::from(byte));\n+                    if handshake.len() >= length + 4 {\n+                        return server_padding_from_client_hello(&handshake[4..length + 4]);\n+                    }\n+                }\n+            }\n+        };\n+        let (result, extension) = tokio::join!(request.send(), capture);\n+        assert!(result.unwrap_err().is_connect());\n+        extension\n+    })\n+    .await\n+    .expect(\"ClientHello capture timed out\")\n+}\n+\n+fn server_padding_from_client_hello(mut hello: &[u8]) -> Option<Vec<u8>> {\n+    take(&mut hello, 2 + 32); // Legacy version and random.\n+    take_vector(&mut hello, 1); // Session ID.\n+    take_vector(&mut hello, 2); // Cipher suites.\n+    take_vector(&mut hello, 1); // Compression methods.\n+    let mut extensions = take_vector(&mut hello, 2);\n+    while !extensions.is_empty() {\n+        let kind = take(&mut extensions, 2);\n+        let data = take_vector(&mut extensions, 2);\n+        if u16::from_be_bytes([kind[0], kind[1]]) == 4832 {\n+            return Some(data.to_vec());\n+        }\n+    }\n+    None\n+}\n+\n+fn take<'a>(input: &mut &'a [u8], length: usize) -> &'a [u8] {\n+    let (value, rest) = input.split_at(length);\n+    *input = rest;\n+    value\n+}\n+\n+fn take_vector<'a>(input: &mut &'a [u8], prefix: usize) -> &'a [u8] {\n+    let length = take(input, prefix)\n+        .iter()\n+        .fold(0usize, |n, &byte| (n << 8) | usize::from(byte));\n+    take(input, length)\n+}"
+    }
+  ]
+}

@@ -7,6 +7,57 @@ under *Unreleased* land in the next tag.
 
 ## [Unreleased]
 
+### Changed
+
+- **Stealth Chrome identity 154 -> 156.** PerimeterX gates on the Chrome
+  major in the user-agent. The same request with identical headers returns
+  the "are you a robot" challenge at 154 and the article at 155 and above.
+  Wire UA, `sec-ch-ua`, the profile table, CDP `product`/`jsVersion`, and the
+  JS defaults now advertise Chrome 156. The TLS profile stays
+  `Profile::Chrome154`, the highest wreq-util ships. The ClientHello carries
+  no Chrome version, so the two do not contradict each other.
+- **One user-agent on the wire, one precedence chain.** The stealth path set
+  the emulation profile UA and the resolved UA separately, which could emit a
+  duplicate header. Resolution is now per-request header, then extra headers,
+  then `--user-agent`, then the stealth identity.
+- **Unsolicited UA major skew is the wall.** Confirmed with real Chrome 156
+  on this machine through CDP in a fresh incognito context, and with curl
+  using identical header sets that differed only in the version string.
+
+### Fixed
+
+- **AX node ids are DOM-derived again, and synthetic bounds are back.** The
+  upstream merge switched ids to an ordinal counter, which renumbers every
+  node when an earlier sibling is inserted, and dropped the `bounds` block
+  that `docs/persistent-fetch-worker-protocol.md` promises. Pinned by
+  `ax_node_ids_derive_from_dom_ids_and_bounds_are_marked_synthetic`.
+- **A pre-split `localstorage.json` is migrated on load.** Upstream reads only
+  the per-origin directory, so an upgraded profile would have started with
+  empty `localStorage` while cookies survived. The legacy file is adopted once
+  and left in place for a downgrade. Pinned by
+  `legacy_single_file_localstorage_is_migrated_on_upgrade`.
+- **The extension prepass binds the context Web Storage.** It had been reading
+  the private store that `ObscuraState` allocates by default, then dropping it
+  with the realm, so an extension that shaped a request header from
+  `localStorage` saw empty data with no error.
+
+### Added
+
+- **`docs/Upstream-sync-and-stealth-156.md`.** Working record of the upstream
+  sync, the Chrome 156 identity change, the evidence for each claim, and the
+  known limitations.
+
+### Removed
+
+- **`obscura_net::LocalStorageStore`.** Superseded by upstream's context-scoped
+  `OriginStorage`, which adds per-origin files, atomic writes, byte budgets,
+  tab-scoped `sessionStorage`, IndexedDB, and `SecurityError` on an opaque
+  origin. `docs/persistence.md` documents the new on-disk layout.
+
+## [0.2.4] - 2026-10-10
+
+Private-line release aligned with upstream tag `v0.2.4` / `upstream/main` @ `73299d5`, while keeping WebExtension, localStorage, stealth Chrome 148, fetch-worker, and dist CI.
+
 ### Added
 
 - **Persistent Fetch worker protocol.** `obscura-worker --fetch-protocol`
@@ -68,6 +119,7 @@ under *Unreleased* land in the next tag.
 
 ### Changed
 
+- **Absorbed upstream `main` through `73299d5`.** Package version aligned to `0.2.4` (matches upstream tag `v0.2.4`). Private stealth identity, WebExtension host, localStorage persistence, fetch-worker AX dumps, and `obscura-dist` CI are preserved across the merge.
 - **Dynamic classic scripts now load concurrently.** JavaScript-created
   classic `<script src>` elements no longer share the serialized ES-module
   import queue. This removes a large webpack chunk bottleneck observed on X:
