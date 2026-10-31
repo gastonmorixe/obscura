@@ -44,5 +44,14 @@ crate = "jpeg-encoder"
 
 [sources]
 unknown-registry = "deny"
+# Git sources are denied by default. The stealth transport is the one
+# exception: the published wreq 0.16.1 predates the Chrome 154 TLS profile and
+# lacks the trust_anchors / grease_sigalgs_enabled hooks that profile needs, so
+# wreq and the btls family are pinned to reviewed upstream revisions.
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = [
+    "https://github.com/0x676e67/wreq",
+    "https://github.com/0x676e67/wreq-util",
+    "https://github.com/0x676e67/btls",
+]

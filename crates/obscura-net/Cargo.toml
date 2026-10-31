@@ -41,7 +41,7 @@ futures-util = { version = "0.3", optional = true }
 # scores its absence and serves the CAPTCHA interstitial. Must be paired with
 # wreq's decode features below so the advertised encodings are actually
 # decompressed (see issue: WSJ/DataDome block).
-wreq-util = { git = "https://github.com/0x676e67/wreq-util", rev = "5715529002738f46eea86a7271f918f9374d3582", optional = true, features = ["emulation-compression"] }
+wreq-util = { git = "https://github.com/0x676e67/wreq-util", rev = "4d21e3b65d6846187e02802172073438944e6399", optional = true, features = ["emulation-compression"] }
 
 [dev-dependencies]
 socket2 = "0.6"

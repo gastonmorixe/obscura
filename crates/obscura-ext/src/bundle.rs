@@ -95,10 +95,16 @@ impl Bundle {
             if entry.is_dir() {
                 continue;
             }
-            let raw_name = entry
-                .enclosed_name()
-                .map(|p| p.to_string_lossy().replace('\\', "/"))
-                .unwrap_or_else(|| entry.name().to_string());
+            // zip 9 makes `name()` fallible: it lossily decodes the entry
+            // name from the archive. An unreadable name cannot be a bundle
+            // path, so skip the entry rather than guess.
+            let raw_name = match entry.enclosed_name() {
+                Some(path) => path.to_string_lossy().replace('\\', "/"),
+                None => match entry.name() {
+                    Ok(name) => name.replace('\\', "/"),
+                    Err(_) => continue,
+                },
+            };
             let mut buf = Vec::new();
             entry.read_to_end(&mut buf)?;
             files.insert(raw_name, buf);
@@ -253,7 +259,7 @@ mod tests {
     fn synth_zip_bytes() -> Vec<u8> {
         let mut buf = std::io::Cursor::new(Vec::new());
         let mut zip = zip::ZipWriter::new(&mut buf);
-        let opts: zip::write::FileOptions<'_, ()> =
+        let opts: zip::write::FileOptions<'_, '_, ()> =
             zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         let manifest = r#"{
             "manifest_version": 2,
@@ -382,7 +388,7 @@ mod tests {
         fn build() -> Vec<u8> {
             let mut buf = std::io::Cursor::new(Vec::new());
             let mut zip = zip::ZipWriter::new(&mut buf);
-            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+            let opts: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default()
                 .compression_method(zip::CompressionMethod::Deflated);
             // Root manifest — the real one. Two background scripts.
             let root_manifest = r#"{
