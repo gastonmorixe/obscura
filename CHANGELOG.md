@@ -9,10 +9,20 @@ under *Unreleased* land in the next tag.
 
 ### Changed
 
-- **Stealth Chrome identity 148 -> 154.** Wire UA, `sec-ch-ua` GREASE brand
-  `"Not A(Brand"`, `Profile::Chrome154`, CDP product/`jsVersion` (V8 15.4.0.0),
-  bootstrap/navigator defaults, and profile table now advertise Chrome 154
-  macOS. The `major >= 148` 2-brand GREASE threshold is unchanged.
+- **Stealth Chrome identity 154 -> 156.** PerimeterX gates on the Chrome
+  major in the user-agent. The same request with identical headers returns
+  the "are you a robot" challenge at 154 and the article at 155 and above.
+  Wire UA, `sec-ch-ua`, the profile table, CDP `product`/`jsVersion`, and the
+  JS defaults now advertise Chrome 156. The TLS profile stays
+  `Profile::Chrome154`, the highest wreq-util ships. The ClientHello carries
+  no Chrome version, so the two do not contradict each other.
+- **One user-agent on the wire, one precedence chain.** The stealth path set
+  the emulation profile UA and the resolved UA separately, which could emit a
+  duplicate header. Resolution is now per-request header, then extra headers,
+  then `--user-agent`, then the stealth identity.
+- **Unsolicited UA major skew is the wall.** Confirmed with real Chrome 156
+  on this machine through CDP in a fresh incognito context, and with curl
+  using identical header sets that differed only in the version string.
 
 ## [0.2.4] - 2026-10-10
 
