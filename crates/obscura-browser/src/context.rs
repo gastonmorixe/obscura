@@ -83,13 +83,55 @@ fn write_file_atomically(path: &std::path::Path, bytes: &[u8]) -> std::io::Resul
     std::fs::rename(&tmp, path)
 }
 
-/// Restore `{storage_dir}/localStorage/*.json` into a fresh store.
+/// Migrate a pre-split `{storage_dir}/localstorage.json` file, which held one
+/// `{origin: {key: value}}` map, into the per-origin store. Returns the number
+/// of origins adopted. The legacy file is left in place so a downgrade still
+/// finds its data.
+fn load_legacy_web_storage(storage: &OriginStorage, dir: &PathBuf) -> usize {
+    let path = dir.join("localstorage.json");
+    if !path.is_file() {
+        return 0;
+    }
+    let Ok(contents) = std::fs::read_to_string(&path) else {
+        tracing::warn!("Unreadable legacy {}", path.display());
+        return 0;
+    };
+    let Ok(parsed) = serde_json::from_str::<std::collections::HashMap<String, std::collections::HashMap<String, String>>>(&contents) else {
+        tracing::warn!("Ignoring malformed legacy {}", path.display());
+        return 0;
+    };
+    let mut adopted = 0usize;
+    for (origin, entries) in parsed {
+        let valid_origin = origin == "file://"
+            || url::Url::parse(&origin)
+                .is_ok_and(|url| url.origin().ascii_serialization() == origin && origin != "null");
+        if !valid_origin || entries.is_empty() {
+            continue;
+        }
+        let ordered: Vec<(String, String)> = entries.into_iter().collect();
+        if storage.load(&origin, ordered) {
+            adopted += 1;
+        }
+    }
+    if adopted > 0 {
+        tracing::info!(
+            "Migrated {} origin(s) from legacy {} into the per-origin store",
+            adopted,
+            path.display()
+        );
+    }
+    adopted
+}
+
+/// Restore `{storage_dir}/localStorage/*.json` into a fresh store, falling back
+/// to the legacy single-file layout when no per-origin file exists yet.
 fn load_web_storage(storage: &OriginStorage, dir: Option<&PathBuf>) {
     use std::io::Read;
     let Some(dir) = dir else { return };
     let root = dir.join("localStorage");
-    let Ok(read_dir) = std::fs::read_dir(&root) else { return };
-    for entry in read_dir.flatten() {
+    // No per-origin dir yet is the normal upgrade case, not a reason to stop.
+    let read_dir = std::fs::read_dir(&root).ok();
+    for entry in read_dir.into_iter().flatten().flatten() {
         let path = entry.path();
         if path.extension().and_then(|ext| ext.to_str()) != Some("json")
             || !entry.file_type().is_ok_and(|kind| kind.is_file()) {
@@ -114,6 +156,9 @@ fn load_web_storage(storage: &OriginStorage, dir: Option<&PathBuf>) {
             Err(e) => tracing::warn!("Ignoring unreadable {}: {}", path.display(), e),
         }
     }
+    // An upgraded profile still has the old single-file layout. Adopt it once,
+    // so an upgrade does not silently drop every stored origin.
+    load_legacy_web_storage(storage, dir);
 }
 
 impl BrowserContext {
@@ -540,6 +585,33 @@ mod tests {
     }
 
     #[test]
+    fn legacy_single_file_localstorage_is_migrated_on_upgrade() {
+        // Pre-split profiles kept one `{origin: {key: value}}` map in
+        // `localstorage.json`. An upgrade must adopt it instead of silently
+        // starting with empty storage.
+        let dir = temp_storage_dir("legacy-migrate");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("localstorage.json"),
+            r#"{"https://app.example":{"token":"abc","theme":"dark"}}"#,
+        )
+        .unwrap();
+
+        let ctx = BrowserContext::with_storage("upgraded".into(), Some(dir.clone()));
+        assert_eq!(
+            ctx.local_storage.get("https://app.example", "token"),
+            Some("abc".to_string()),
+            "legacy token was not migrated"
+        );
+        assert_eq!(
+            ctx.local_storage.get("https://app.example", "theme"),
+            Some("dark".to_string()),
+            "legacy theme was not migrated"
+        );
+        // The legacy file stays for a downgrade path.
+        assert!(dir.join("localstorage.json").is_file());
+    }
+
     fn local_storage_round_trips_through_the_storage_dir() {
         let dir = temp_storage_dir("roundtrip");
         let first = BrowserContext::with_storage("profile-a".into(), Some(dir.clone()));

@@ -2110,6 +2110,14 @@ impl Page {
         }
         rt.set_cookie_jar(self.context.cookie_jar.clone());
         rt.set_http_client(self.http_client.clone());
+        // Bind the context-owned Web Storage before extension scripts run.
+        // Without this the prepass realm keeps ObscuraState's private
+        // OriginStorage (ops.rs), so an extension that reads localStorage to
+        // shape a request header sees an empty store and loses it silently
+        // when the realm is dropped.
+        rt.set_local_storage(self.context.local_storage.clone());
+        rt.set_indexed_db(self.context.indexed_db.clone());
+        rt.set_session_storage(Arc::new(OriginStorage::default()));
         // Initialize the minimal document before extension scripts run.
         // set_dom stores the tree. run_page_init exposes globalThis.document.
         rt.set_dom(parse_html("<html><head></head><body></body></html>"));

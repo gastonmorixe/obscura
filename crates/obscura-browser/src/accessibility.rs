@@ -38,7 +38,6 @@ pub fn build_ax_nodes_with_styles(
     styles: &HashMap<NodeId, AccessibilityStyle>,
 ) -> Vec<Value> {
     let mut nodes: Vec<Value> = Vec::new();
-    let mut id_counter: u32 = 0;
     // Map DOM NodeId → AX string id, populated only for nodes actually in the AX tree
     let mut dom_to_ax: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
 
@@ -56,8 +55,11 @@ pub fn build_ax_nodes_with_styles(
         if let Some(node) = dom.get_node(*dom_id) {
             let role = map_role(&node.data);
             if !role.is_empty() && !context.is_hidden(*dom_id) {
-                id_counter += 1;
-                dom_to_ax.insert(dom_id.raw(), id_counter.to_string());
+                // Derive the AX id from the DOM node id, not from an ordinal
+                // counter. An insertion earlier in the document would otherwise
+                // renumber every AX node, and the fetch-worker protocol
+                // documents ids as stable per document.
+                dom_to_ax.insert(dom_id.raw(), format!("ax-{}", dom_id.raw()));
                 eligible.push(*dom_id);
             }
         }
@@ -118,6 +120,16 @@ fn build_ax_node(
 
     ax_node["nodeId"] = json!(ax_id);
     ax_node["ignored"] = json!(false);
+    // Bounds are synthetic: there is no paint geometry in the AX path. They
+    // stay deterministic per DOM node and are marked synthetic so agent
+    // clients do not read them as real layout.
+    ax_node["bounds"] = json!({
+        "x": 0,
+        "y": node_id.raw().saturating_mul(24),
+        "width": 1024,
+        "height": 24,
+        "synthetic": true,
+    });
     if let Some(ref pid) = parent_id {
         ax_node.as_object_mut().unwrap().insert("parentId".into(), json!(pid));
     }
@@ -890,6 +902,31 @@ mod tests {
         );
         assert_name(&dom, "field", Some("Account Help"));
         assert_name(&dom, "button", Some("Open folder"));
+    }
+
+    #[test]
+    fn ax_node_ids_derive_from_dom_ids_and_bounds_are_marked_synthetic() {
+        // The fetch-worker protocol documents AX ids as derived from DOM node
+        // ids and bounds as explicitly synthetic. Both are a client contract:
+        // an ordinal counter renumbers every node when an earlier sibling is
+        // inserted, and unmarked bounds read as real paint geometry.
+        let dom = parse_html(r#"<button id="one">One</button><button id="two">Two</button>"#);
+        let nodes = build_ax_nodes(&dom);
+        let one = dom.get_element_by_id("one").unwrap();
+        let node = nodes
+            .iter()
+            .find(|node| node["backendDOMNodeId"] == one.raw())
+            .expect("button one is in the AX tree");
+        assert_eq!(node["nodeId"], json!(format!("ax-{}", one.raw())));
+        assert_eq!(node["bounds"]["synthetic"], json!(true));
+        assert_eq!(node["bounds"]["width"], json!(1024));
+        // Stable across rebuilds of the same DOM.
+        let again = build_ax_nodes(&dom);
+        let node_again = again
+            .iter()
+            .find(|n| n["backendDOMNodeId"] == one.raw())
+            .unwrap();
+        assert_eq!(node["nodeId"], node_again["nodeId"]);
     }
 
     #[test]
