@@ -184,6 +184,72 @@ async fn prepass_initializes_document_before_content_script_registers_headers() 
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn extension_block_rules_cancel_matching_subresources() {
+    let tmp = tempfile::Builder::new().prefix("obscura-block-test").tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("manifest.json"),
+        r#"{
+          "manifest_version": 2,
+          "name": "SynthBlock",
+          "version": "1.0",
+          "permissions": [
+            "*://*.wsj.com/*", "declarativeNetRequest"
+          ],
+          "background": { "scripts": ["bg.js"] }
+        }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.path().join("bg.js"),
+        r#"
+        chrome.declarativeNetRequest.updateSessionRules({
+          addRules: [{
+            id: 1, priority: 1,
+            action: { type: "block" },
+            condition: {
+              initiatorDomains: ["wsj.com"],
+              urlFilter: "||cdn.tinypass.com",
+              resourceTypes: ["script", "xmlhttprequest"]
+            }
+          }]
+        });
+        "#,
+    )
+    .unwrap();
+    let bundle = obscura_ext::Bundle::load(tmp.path()).expect("bundle load");
+    let ext = std::sync::Arc::new(obscura_ext::ExtensionRuntime::new(std::sync::Arc::new(bundle)));
+    let ctx = std::sync::Arc::new(
+        BrowserContext::with_options("test".into(), None, false).with_extension(ext),
+    );
+    let mut page = Page::new("p".into(), ctx);
+    page.set_url_for_test("https://www.wsj.com/tech/ai/x-f8569c8c");
+
+    assert!(
+        page.extension_blocks_with_prepass_for_test(
+            "https://cdn.tinypass.com/api/tinypass.min.js",
+            "script",
+        )
+        .await,
+        "tinypass script on a wsj.com page should be blocked by the extension rule",
+    );
+    assert!(
+        !page
+            .extension_blocks_with_prepass_for_test(
+                "https://cdn.tinypass.com/api/tinypass.min.js",
+                "image",
+            )
+            .await,
+        "resource-type mismatch should not block",
+    );
+    assert!(
+        !page
+            .extension_blocks_with_prepass_for_test("https://www.wsj.com/asset/app.js", "script",)
+            .await,
+        "non-matching URL should not block",
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn no_extension_means_no_headers() {
     let ctx = Arc::new(BrowserContext::with_options("test".into(), None, false));
     let page = Page::new("p".into(), ctx);

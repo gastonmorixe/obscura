@@ -12,12 +12,13 @@
 //! Obscura treats that call as a no-op (as it used to), the header never
 //! reaches the network layer and the page comes back truncated.
 //!
-//! We deliberately do NOT implement `block` / `redirect` / `upgradeScheme`
-//! here — the existing `dnr_block_substrings` shortcut in `state.rs` covers
-//! blocking, and redirects aren't needed for the paywall case. `response`
-//! header modification is also out of scope (Obscura's dump pipeline reads
-//! the response after the fact; rewriting response headers wouldn't change
-//! what the server already sent).
+//! `block` rules are parsed, stored, and matched here (`BlockRule`), so the
+//! host can cancel paywall-script requests the same way `modifyHeaders`
+//! rules rewrite the document referer. `redirect` / `upgradeScheme` stay out
+//! of scope (not needed for the paywall case). `response` header
+//! modification is also out of scope (Obscura's dump pipeline reads the
+//! response after the fact; rewriting response headers wouldn't change what
+//! the server already sent).
 //!
 //! URL matching follows the DNR `urlFilter` mini-syntax
 //! (<https://developer.chrome.com/docs/extensions/reference/api/declarativeNetRequest#url-filter-syntax>):
@@ -63,10 +64,12 @@ impl HeaderOperation {
     }
 }
 
-/// A DNR rule reduced to what Obscura acts on: a URL condition plus a list
-/// of request-header modifications. Rules whose action isn't
-/// `modifyHeaders`, or that carry no `requestHeaders`, are dropped at parse
-/// time (they return `None`).
+/// A DNR rule reduced to a URL condition plus an action: either a list of
+/// request-header modifications (`modifyHeaders`) or a request block
+/// (`block` / `allow`, where `allow` outranks `block` at equal priority per
+/// the DNR spec). Rules of any other action type, or `modifyHeaders` rules
+/// that carry no `requestHeaders`, are dropped at parse time (they return
+/// `None`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeaderRule {
     /// Developer-assigned rule id (used for dedup / removal).
@@ -74,6 +77,51 @@ pub struct HeaderRule {
     pub priority: i64,
     pub condition: UrlCondition,
     pub request_headers: Vec<HeaderOp>,
+}
+
+/// A parsed `block` / `allow` rule: condition plus the winning priority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockRule {
+    pub id: i64,
+    pub priority: i64,
+    /// True for `allow` (permit), false for `block` (cancel).
+    pub allow: bool,
+    pub condition: UrlCondition,
+}
+
+impl BlockRule {
+    /// Parse a single DNR rule JSON object. Returns `None` for any rule
+    /// whose action is not `block` / `allow`.
+    pub fn from_json(v: &Value) -> Option<Self> {
+        let action = v.get("action")?;
+        let action_type = action.get("type").and_then(|t| t.as_str())?;
+        let allow = match action_type {
+            "block" => false,
+            "allow" => true,
+            _ => return None,
+        };
+        let id = v.get("id").and_then(|i| i.as_i64()).unwrap_or(0);
+        let priority = v.get("priority").and_then(|i| i.as_i64()).unwrap_or(1);
+        let condition = parse_condition(v.get("condition"));
+        Some(BlockRule {
+            id,
+            priority,
+            allow,
+            condition,
+        })
+    }
+
+    /// Does this rule apply to `url` requested as `resource_type`
+    /// (e.g. `"script"`), initiated by `initiator_url`?
+    pub fn matches_initiated(
+        &self,
+        url: &str,
+        resource_type: &str,
+        initiator_url: Option<&str>,
+    ) -> bool {
+        self.condition
+            .matches_initiated(url, resource_type, initiator_url)
+    }
 }
 
 /// The matching half of a DNR rule, restricted to the fields BPC uses.
@@ -90,6 +138,13 @@ pub struct UrlCondition {
     /// Lower-cased `requestDomains`, if present.
     pub request_domains: Vec<String>,
     pub excluded_request_domains: Vec<String>,
+    /// Lower-cased `initiatorDomains`, if present. BPC scopes its script
+    /// blocks by initiator (e.g. `initiatorDomains: [domain]` with
+    /// `urlFilter: '*'`); ignoring this would block every script on every
+    /// page, so enforcement must pass the document URL (see
+    /// `matches_initiated`).
+    pub initiator_domains: Vec<String>,
+    pub excluded_initiator_domains: Vec<String>,
 }
 
 impl HeaderRule {
@@ -159,6 +214,8 @@ fn parse_condition(v: Option<&Value>) -> UrlCondition {
             resource_types: Vec::new(),
             request_domains: Vec::new(),
             excluded_request_domains: Vec::new(),
+            initiator_domains: Vec::new(),
+            excluded_initiator_domains: Vec::new(),
         };
     };
     let url_filter = v
@@ -172,12 +229,16 @@ fn parse_condition(v: Option<&Value>) -> UrlCondition {
     let resource_types = string_array(v.get("resourceTypes"));
     let request_domains = lower_string_array(v.get("requestDomains"));
     let excluded_request_domains = lower_string_array(v.get("excludedRequestDomains"));
+    let initiator_domains = lower_string_array(v.get("initiatorDomains"));
+    let excluded_initiator_domains = lower_string_array(v.get("excludedInitiatorDomains"));
     UrlCondition {
         url_filter,
         regex,
         resource_types,
         request_domains,
         excluded_request_domains,
+        initiator_domains,
+        excluded_initiator_domains,
     }
 }
 
@@ -200,6 +261,20 @@ fn lower_string_array(v: Option<&Value>) -> Vec<String> {
 
 impl UrlCondition {
     pub fn matches(&self, url: &str, resource_type: &str) -> bool {
+        self.matches_initiated(url, resource_type, None)
+    }
+
+    /// Match with an optional initiating document URL for
+    /// `initiatorDomains` / `excludedInitiatorDomains`. `None` means no
+    /// initiator is known (top-level document fetch): a rule that names
+    /// initiator domains does not match, mirroring Chrome where a
+    /// navigation has no initiator.
+    pub fn matches_initiated(
+        &self,
+        url: &str,
+        resource_type: &str,
+        initiator_url: Option<&str>,
+    ) -> bool {
         // resourceTypes: empty means "all types except main_frame" per the
         // DNR spec. But Obscura only evaluates header rules against the
         // top-level document fetch, and BPC always lists main_frame
@@ -228,6 +303,28 @@ impl UrlCondition {
             .any(|d| domain_matches(&host, d))
         {
             return false;
+        }
+
+        if !self.initiator_domains.is_empty() || !self.excluded_initiator_domains.is_empty() {
+            let Some(initiator) = initiator_url else {
+                return false;
+            };
+            let initiator_host = host_of(initiator);
+            if !self.initiator_domains.is_empty()
+                && !self
+                    .initiator_domains
+                    .iter()
+                    .any(|d| domain_matches(&initiator_host, d))
+            {
+                return false;
+            }
+            if self
+                .excluded_initiator_domains
+                .iter()
+                .any(|d| domain_matches(&initiator_host, d))
+            {
+                return false;
+            }
         }
 
         if let Some(uf) = &self.url_filter {

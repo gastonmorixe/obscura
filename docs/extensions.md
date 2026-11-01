@@ -116,37 +116,35 @@ Misses skip the preload entirely — no V8 work, no parsing.
 
 ### 2. Build the preload string
 
-`build_preload_script(url)` produces a single JS string with this
-structure:
+### 2. Build the bootstrap and idle strings
+
+`build_bootstrap_script(url)` produces the JS string `init_js` injects
+before any page script runs: bundle registry, chrome shim, background
+scripts. It deliberately does NOT fire `tabs.onUpdated` or drain
+timers: the document is still an empty stub at that point, so injected
+content scripts would see no DOM.
+
+`build_idle_script(url)` produces the second string, which the host
+runs after the document's own scripts (`run_extension_idle_phase` at
+the end of `execute_scripts`):
 
 ```js
-(function obscuraExtensionBootstrap() {
-  if (globalThis.__obscura_ext_loaded) return;     // idempotency guard
-  globalThis.__obscura_ext_loaded = true;
-  globalThis.__obscura_ext_bundle = { ... };        // every .js in the bundle
-  globalThis.__obscura_ext_manifest = { ... };      // synthesised manifest subset
-  globalThis.__obscura_ext_id = "...";              // extension id
-  globalThis.__obscura_ext_url = "...";             // current page URL
-  globalThis.__obscura_ext_mv = 2;                  // manifest_version
-
-  // === chrome / browser shim ===
-  // (the entire contents of chrome_shim.js, ~470 lines)
-  // ...defines globalThis.chrome, globalThis.browser
-
-  // === bundle's background scripts in load order ===
-
-  // === (optional) storage seed injected before the last bg script ===
-  // For extensions that gate behaviour on a "site enabled" map in
-  // storage.local, we pre-populate that map from the bundle's own
-  // default-sites tables so the extension behaves as if every site
-  // it ships rules for is enabled. See ExtensionRuntime in runtime.rs
-  // for the exact heuristic.
-
+(function obscuraExtensionIdle() {
   // === trigger ===
   globalThis.__obscura_ext_fire_loaded(url);
-  globalThis.__obscura_ext_drain_timers(50);
+  globalThis.__obscura_ext_drain_timers(50);   // first idle fire only
+  // === static manifest content_scripts in run_at order ===
+  // document_start entries, then document_end, then document_idle
 })();
 ```
+
+`build_preload_script(url)` (bootstrap plus idle) is kept for the
+request-header pre-pass, which runs both halves in a stub realm.
+
+Static manifest `content_scripts` entries that match the URL run inside
+the idle phase in `run_at` order, through the same bundle-registry
+lookup `tabs.executeScript` uses. `wants_url` gates injection: host
+permissions match OR any static entry matches.
 
 Eval cost in V8 with a fresh isolate runs ~30–50 ms for a ~1 MB
 extension bundle.
@@ -156,8 +154,9 @@ extension bundle.
 Real Chrome fires `tabs.onUpdated` events with `{status: 'loading'}`
 and later `{status: 'complete'}` as the page loads. Obscura's
 one-page-per-context model has nothing to listen on; we synthesise a
-single event with `{status: 'complete'}` for the current page right
-after the background scripts finish evaluating.
+single event with `{status: 'complete'}` for the current page in the
+idle phase, after the document's own scripts have run, so injected
+content scripts see page-built DOM.
 
 This is the standard hook point for extensions: a typical MV2
 background script does
@@ -189,9 +188,11 @@ The `chrome` shim therefore overrides `globalThis.setTimeout` (and
 `setInterval` / `clearTimeout`) with a synchronous queue plus a drain
 function. The flow:
 
-1. The preload IIFE fires the onUpdated event. The bg listener runs
+1. The idle IIFE fires the onUpdated event. The bg listener runs
    and queues a `setTimeout(fn, 0)` — appended to `_timer_queue`.
-2. Preload calls `__obscura_ext_drain_timers(50)`.
+2. Idle calls `__obscura_ext_drain_timers(50)` (first idle fire only;
+   a re-fire skips the drain so timers queued after idle run at the
+   next explicit idle call instead of doubling).
 3. The drain pops timers FIFO and invokes them. Each callback can
    push new timers onto the queue (it's common for extensions to
    queue ~5 retries spaced 200 ms apart, plus a follow-up

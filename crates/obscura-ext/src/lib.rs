@@ -25,7 +25,7 @@ pub mod runtime;
 pub mod state;
 
 pub use bundle::{Bundle, BundleError};
-pub use dnr::{HeaderOp, HeaderOperation, HeaderRule};
+pub use dnr::{BlockRule, HeaderOp, HeaderOperation, HeaderRule};
 pub use manifest::{ExtensionManifest, ManifestError};
 pub use runtime::ExtensionRuntime;
 pub use state::{ExtensionState, StorageArea};

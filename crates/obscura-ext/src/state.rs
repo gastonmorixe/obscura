@@ -18,7 +18,7 @@ use std::sync::{Mutex, RwLock};
 
 use serde_json::Value;
 
-use crate::dnr::{HeaderOperation, HeaderRule};
+use crate::dnr::{BlockRule, HeaderOperation, HeaderRule};
 
 /// `chrome.storage.local` / `chrome.storage.sync` / `chrome.storage.session`.
 /// Obscura collapses all three to the same in-memory map keyed by area
@@ -123,6 +123,13 @@ pub struct ExtensionState {
     /// the `Referer` / `User-Agent` that unlock the full article on the
     /// top-level document fetch. See `crate::dnr`.
     header_rules: RwLock<HashMap<i64, HeaderRule>>,
+    /// `declarativeNetRequest` session/dynamic rules whose action is
+    /// `block` / `allow`. Keyed by rule id like the header rules. This is
+    /// how paywall extensions cancel paywall scripts (`block_regex` in BPC
+    /// becomes a `block` session rule); the host consults them for every
+    /// subresource fetch via [`ExtensionState::is_blocked`]. See
+    /// `crate::dnr`.
+    block_rules: RwLock<HashMap<i64, BlockRule>>,
 }
 
 impl ExtensionState {
@@ -161,22 +168,60 @@ impl ExtensionState {
         self.dnr_block_substrings.read().unwrap().clone()
     }
 
-    /// Ingest one `declarativeNetRequest` rule's JSON. No-op unless it's a
-    /// `modifyHeaders` request-header rule (see `HeaderRule::from_json`).
-    /// Returns true if the rule was stored.
+    /// Ingest one `declarativeNetRequest` rule's JSON. Stores
+    /// `modifyHeaders` request-header rules and `block` / `allow` rules;
+    /// anything else is a no-op. Returns true if the rule was stored.
     pub fn add_dnr_rule(&self, rule_json: &Value) -> bool {
         if let Some(rule) = HeaderRule::from_json(rule_json) {
             self.header_rules.write().unwrap().insert(rule.id, rule);
-            true
-        } else {
-            false
+            return true;
         }
+        if let Some(rule) = BlockRule::from_json(rule_json) {
+            self.block_rules.write().unwrap().insert(rule.id, rule);
+            return true;
+        }
+        false
     }
 
-    /// Remove a stored header rule by id (for
+    /// Remove a stored header or block rule by id (for
     /// `updateSessionRules({removeRuleIds})`).
     pub fn remove_dnr_rule(&self, id: i64) {
         self.header_rules.write().unwrap().remove(&id);
+        self.block_rules.write().unwrap().remove(&id);
+    }
+
+    /// Whether a subresource fetch of `url` (as `resource_type`, e.g.
+    /// `"script"`) initiated by the document at `initiator_url` is cancelled
+    /// by the stored `block` / `allow` rules. The highest-priority matching
+    /// rule wins; an `allow` at equal priority outranks `block`, mirroring
+    /// the DNR spec closely enough for the single-extension paywall case.
+    /// Returns false when no rule matches.
+    pub fn is_blocked(
+        &self,
+        url: &str,
+        resource_type: &str,
+        initiator_url: Option<&str>,
+    ) -> bool {
+        let rules: Vec<BlockRule> = self
+            .block_rules
+            .read()
+            .unwrap()
+            .values()
+            .filter(|r| r.matches_initiated(url, resource_type, initiator_url))
+            .cloned()
+            .collect();
+        if rules.is_empty() {
+            return false;
+        }
+        let max_priority = rules.iter().map(|r| r.priority).max().unwrap_or(0);
+        // At the winning priority an allow rule permits the request.
+        if rules
+            .iter()
+            .any(|r| r.priority == max_priority && r.allow)
+        {
+            return false;
+        }
+        rules.iter().any(|r| r.priority == max_priority && !r.allow)
     }
 
     /// All stored header-rewrite rules, lowest-priority first. Mostly for
@@ -213,6 +258,46 @@ impl ExtensionState {
             .unwrap()
             .values()
             .filter(|r| r.matches(url, resource_type))
+            .cloned()
+            .collect();
+        rules.sort_by_key(|r| r.priority);
+
+        let mut out: HashMap<String, Option<String>> = HashMap::new();
+        for rule in rules {
+            for op in &rule.request_headers {
+                match op.operation {
+                    HeaderOperation::Set | HeaderOperation::Append => {
+                        if let Some(v) = &op.value {
+                            out.insert(op.header.clone(), Some(v.clone()));
+                        }
+                    }
+                    HeaderOperation::Remove => {
+                        out.insert(op.header.clone(), None);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Same as [`matched_request_headers`], but scoped by an initiating
+    /// document URL for `initiatorDomains` rules. Falls back to the plain
+    /// matcher when no initiator is known.
+    pub fn matched_request_headers_initiated(
+        &self,
+        url: &str,
+        resource_type: &str,
+        initiator_url: Option<&str>,
+    ) -> HashMap<String, Option<String>> {
+        let mut rules: Vec<HeaderRule> = self
+            .header_rules
+            .read()
+            .unwrap()
+            .values()
+            .filter(|r| {
+                r.condition
+                    .matches_initiated(url, resource_type, initiator_url)
+            })
             .cloned()
             .collect();
         rules.sort_by_key(|r| r.priority);
@@ -286,6 +371,77 @@ mod tests {
     }
 
     #[test]
+    fn block_rule_is_stored_and_matched() {
+        let st = ExtensionState::new();
+        let block = json!({
+            "id": 1, "priority": 1,
+            "action": {"type": "block"},
+            "condition": {
+                "initiatorDomains": ["wsj.com"],
+                "urlFilter": "*",
+                "resourceTypes": ["script", "xmlhttprequest"]
+            }
+        });
+        assert!(st.add_dnr_rule(&block));
+        assert!(st.header_rules().is_empty());
+        assert!(st.is_blocked(
+            "https://cdn.tinypass.com/api/tinypass.min.js",
+            "script",
+            Some("https://www.wsj.com/tech/ai/x-f8569c8c"),
+        ));
+        assert!(!st.is_blocked(
+            "https://cdn.tinypass.com/api/tinypass.min.js",
+            "script",
+            Some("https://www.example.com/x"),
+        ));
+        assert!(!st.is_blocked(
+            "https://cdn.tinypass.com/api/tinypass.min.js",
+            "image",
+            Some("https://www.wsj.com/tech/ai/x-f8569c8c"),
+        ));
+        st.remove_dnr_rule(1);
+        assert!(!st.is_blocked(
+            "https://cdn.tinypass.com/api/tinypass.min.js",
+            "script",
+            Some("https://www.wsj.com/tech/ai/x-f8569c8c"),
+        ));
+    }
+
+    #[test]
+    fn allow_outranks_block_at_equal_priority() {
+        let st = ExtensionState::new();
+        st.add_dnr_rule(&json!({
+            "id": 1, "priority": 1,
+            "action": {"type": "block"},
+            "condition": {"urlFilter": "||cdn.tinypass.com"}
+        }));
+        st.add_dnr_rule(&json!({
+            "id": 2, "priority": 1,
+            "action": {"type": "allow"},
+            "condition": {"urlFilter": "||cdn.tinypass.com"}
+        }));
+        assert!(!st.is_blocked(
+            "https://cdn.tinypass.com/api/tinypass.min.js",
+            "script",
+            Some("https://www.wsj.com/x"),
+        ));
+    }
+
+    #[test]
+    fn initiator_scoped_rule_needs_an_initiator() {
+        let st = ExtensionState::new();
+        st.add_dnr_rule(&json!({
+            "id": 1, "priority": 1,
+            "action": {"type": "block"},
+            "condition": {
+                "initiatorDomains": ["wsj.com"],
+                "urlFilter": "*"
+            }
+        }));
+        assert!(!st.is_blocked("https://cdn.tinypass.com/x.js", "script", None));
+    }
+
+    #[test]
     fn block_rule_is_not_stored_as_header_rule() {
         let st = ExtensionState::new();
         let block = json!({
@@ -293,8 +449,13 @@ mod tests {
             "action": {"type": "block"},
             "condition": {"urlFilter": "ads"}
         });
-        assert!(!st.add_dnr_rule(&block));
+        assert!(st.add_dnr_rule(&block));
         assert!(st.header_rules().is_empty());
+        assert!(st.is_blocked(
+            "https://example.com/ads.js",
+            "script",
+            Some("https://www.wsj.com/x"),
+        ));
     }
 
     #[test]

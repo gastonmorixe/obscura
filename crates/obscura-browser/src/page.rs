@@ -104,6 +104,31 @@ fn remaining_settle_resource_warmup_ms(
 #[cfg(feature = "stealth")]
 use obscura_net::StealthHttpClient;
 
+/// Outcome of one live `onBeforeRequest` evaluation in the page realm.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExtensionBeforeRequest {
+    Cancel,
+    Redirect(String),
+}
+
+/// Map a Rust fetch resource type to the webRequest `details.type` value
+/// (`"script"`, `"stylesheet"`, `"image"`, `"xmlhttprequest"`, ...). Falls
+/// back to `"other"` for unknown names so filters still see a valid type.
+fn web_request_resource_type(resource_type: &str) -> &'static str {
+    match resource_type {
+        "script" => "script",
+        "stylesheet" | "Stylesheet" | "style" => "stylesheet",
+        "image" | "Image" => "image",
+        "font" | "Font" => "font",
+        "xhr" | "XHR" | "xmlhttprequest" | "fetch" | "Fetch" => "xmlhttprequest",
+        "main_frame" | "Document" | "document" => "main_frame",
+        "sub_frame" | "SubFrame" => "sub_frame",
+        "media" | "Media" => "media",
+        "websocket" | "WebSocket" => "websocket",
+        _ => "other",
+    }
+}
+
 /// Returns true when a JS-initiated navigation would step from a
 /// non-file scheme into a file: URL. We treat that move as an SOP
 /// violation because the existing realm survives the navigation and
@@ -1205,6 +1230,96 @@ impl Page {
             .any(|pattern| url_matches_cdp_pattern(pattern, url))
     }
 
+    /// Whether the extension attached to this context cancels a subresource
+    /// fetch of `url` (as `resource_type`, e.g. `"script"`) via its stored
+    /// `block` / `allow` DNR rules, scoped by the current document URL as
+    /// the initiator. False when no extension is attached or no rule matches.
+    /// JS `onBeforeRequest` verdicts need `&mut` (page-realm eval), so they
+    /// live in `extension_request_verdict`; this stays `&self` for shared
+    /// checks and the DNR-only test hook below.
+    fn extension_blocks_url(&self, url: &str, resource_type: &str) -> bool {
+        let Some(ext) = &self.context.extension else {
+            return false;
+        };
+        let initiator = self.url.as_ref().map(|u| u.as_str());
+        if ext.is_blocked(url, resource_type, initiator) {
+            tracing::info!("Blocked {} by extension DNR rule: {}", resource_type, url);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Extension verdict for one subresource request: (cancelled, redirect).
+    /// Cancel comes from DNR block rules or `onBeforeRequest` returning
+    /// `{cancel: true}`. Redirect comes from `onBeforeRequest` returning
+    /// `{redirectUrl}` (DNR redirect rules stay out of scope). JS runs with
+    /// a short timeout so a slow listener cannot wedge the fetch; on error
+    /// the DNR verdict stands alone. Needs `&mut` for the page-realm eval.
+    fn extension_request_verdict(
+        &mut self,
+        url: &str,
+        resource_type: &str,
+    ) -> (bool, Option<String>) {
+        if self.extension_blocks_url(url, resource_type) {
+            return (true, None);
+        }
+        match self.extension_run_on_before_request(url, resource_type) {
+            Some(ExtensionBeforeRequest::Cancel) => {
+                tracing::info!("Blocked {} by extension onBeforeRequest: {}", resource_type, url);
+                (true, None)
+            }
+            Some(ExtensionBeforeRequest::Redirect(target)) => {
+                tracing::info!(
+                    "Redirected {} by extension onBeforeRequest: {} -> {}",
+                    resource_type, url, target,
+                );
+                (false, Some(target))
+            }
+            _ => (false, None),
+        }
+    }
+
+    /// Run the live `onBeforeRequest` listeners in the page realm for one
+    /// subresource URL. None when no extension, no realm, out of scope, or
+    /// no listener returns a verdict.
+    fn extension_run_on_before_request(
+        &mut self,
+        url: &str,
+        resource_type: &str,
+    ) -> Option<ExtensionBeforeRequest> {
+        let ext = self.context.extension.clone()?;
+        let page_url = self.url_string();
+        if !ext.wants_url(&page_url) {
+            return None;
+        }
+        let url_json = serde_json::to_string(url).unwrap_or_else(|_| "\"\"".into());
+        let wtype = web_request_resource_type(resource_type);
+        let expr = format!(
+            "(function(){{ try {{ \
+                 var r = globalThis.__obscura_ext_collect_on_before_request \
+                   ? globalThis.__obscura_ext_collect_on_before_request({}, {{method:\"GET\",type:\"{}\"}}) : null; \
+                 return JSON.stringify(r); \
+               }} catch(e) {{ return 'null'; }} }})()",
+            url_json, wtype,
+        );
+        let val = self.evaluate_with_timeout(&expr, std::time::Duration::from_secs(5));
+        let s = val.as_str()?;
+        if s.is_empty() || s == "null" {
+            return None;
+        }
+        let v: serde_json::Value = serde_json::from_str(s).ok()?;
+        if v.get("cancel").and_then(|c| c.as_bool()).unwrap_or(false) {
+            return Some(ExtensionBeforeRequest::Cancel);
+        }
+        if let Some(target) = v.get("redirectUrl").and_then(|r| r.as_str()) {
+            if !target.is_empty() && target != url {
+                return Some(ExtensionBeforeRequest::Redirect(target.to_string()));
+            }
+        }
+        None
+    }
+
     /// Moves fetched frame documents into Page ownership without doing work
     /// that can be cancelled. Realms are still created one at a time, in the
     /// same sibling order as before this queue existed.
@@ -2020,20 +2135,21 @@ impl Page {
 
         self.js = Some(rt);
 
-        // If a WebExtension is attached and its host_permissions match
-        // the current URL, inject the extension's chrome.* shim plus its
-        // background scripts before any page JS runs. The shim itself
-        // synthesises a tabs.onUpdated event for the current page so
-        // Content-script-driven extensions then dispatch their per-site
-        // content scripts via the shim's executeScript dispatcher.
+        // If a WebExtension is attached and in scope for the current URL,
+        // inject the extension bootstrap (chrome.* shim plus background
+        // scripts) before any page JS runs. The bootstrap deliberately
+        // does NOT fire tabs.onUpdated or drain timers: the document is
+        // still an empty stub here, so dynamically injected content
+        // scripts would see no DOM. That is the document_idle phase
+        // (`run_extension_idle_phase`), after the document's own scripts.
         //
         // Wrapped in a closure-style block so a failure to build/inject
         // the preload does NOT abort the navigation — extensions are a
         // privileged feature, not a load-blocking dependency.
         if let Some(ext) = &self.context.extension {
             let url = self.url_string();
-            if ext.matches_url(&url) {
-                let preload = ext.build_preload_script(&url);
+            if ext.wants_url(&url) {
+                let preload = ext.build_bootstrap_script(&url);
                 tracing::info!(
                     "obscura-ext: injecting preload ({} bytes) for url={}",
                     preload.len(),
@@ -2044,8 +2160,8 @@ impl Page {
                     // the watchdog so a runaway `for(;;){}` or a recursive
                     // microtask chain can't wedge navigation. See bug postmortem
                     // 2026-05-19 (orphan obscura at 99% CPU in PromiseFulfillReactionJob).
-                    if let Err(e) = js.execute_script_guarded("<obscura-ext:preload>", &preload) {
-                        tracing::warn!("obscura-ext: preload script failed: {e}");
+                    if let Err(e) = js.execute_script_guarded("<obscura-ext:bootstrap>", &preload) {
+                        tracing::warn!("obscura-ext: bootstrap script failed: {e}");
                     }
                 }
             } else {
@@ -2075,6 +2191,51 @@ impl Page {
     /// Both are merged (DNR taking precedence on a tie). A `remove`
     /// operation from DNR is represented as an empty string here, which the
     /// caller applies as "send empty" (BPC uses this to strip Cookie).
+    /// Test-only URL setter (visible to integration tests, which are
+    /// separate crates). Navigating hits the network; block-rule tests only
+    /// need `self.url` as the initiator scope, so they set it directly.
+    pub fn set_url_for_test(&mut self, url: &str) {
+        if let Ok(parsed) = Url::parse(url) {
+            self.url = Some(parsed);
+        }
+    }
+
+    /// Test/introspection hook: does the attached extension cancel a
+    /// subresource fetch of `url` as `resource_type` on the current page?
+    /// Drives the real pre-pass (background runs, DNR block rules ingest)
+    /// so the test proves the end-to-end wiring, not just the matcher.
+    pub async fn extension_blocks_with_prepass_for_test(
+        &self,
+        url: &str,
+        resource_type: &str,
+    ) -> bool {
+        if let Some(ext) = &self.context.extension {
+            let page_url = self.url_string();
+            if ext.matches_url(&page_url) {
+                let mut rt = ObscuraJsRuntime::with_base_url_and_proxy(
+                    &page_url,
+                    self.context.proxy_url.clone(),
+                );
+                rt.set_url(&page_url);
+                rt.set_cookie_jar(self.context.cookie_jar.clone());
+                rt.set_http_client(self.http_client.clone());
+                rt.set_local_storage(self.context.local_storage.clone());
+                rt.set_indexed_db(self.context.indexed_db.clone());
+                rt.set_session_storage(Arc::new(OriginStorage::default()));
+                rt.set_dom(parse_html("<html><head></head><body></body></html>"));
+                rt.run_page_init();
+                let preload = ext.build_preload_script(&page_url);
+                let _ = rt.execute_script_guarded("<obscura-ext:prepass>", &preload);
+                if let Ok(v) = rt.evaluate(obscura_ext::ExtensionRuntime::DNR_HARVEST_EXPR) {
+                    if let Some(s) = v.as_str() {
+                        ext.ingest_dnr_rules_json(s);
+                    }
+                }
+            }
+        }
+        self.extension_blocks_url(url, resource_type)
+    }
+
     /// Test/introspection hook: run the extension request-header pre-pass
     /// for `url` and return the resolved rewrites without performing the
     /// document fetch. Mirrors exactly what the navigation path applies.
@@ -2087,12 +2248,41 @@ impl Page {
             .unwrap_or_default()
     }
 
+    /// Collect the extension's request-header rewrites for one URL and
+    /// webRequest resource type. `main_frame` preserves the document
+    /// pre-pass behavior exactly; subresource types resolve the rules and
+    /// `onBeforeSendHeaders` listeners the extension scoped to them. The
+    /// pre-pass realm is seeded with the supplied `base_headers` (the
+    /// request's own headers) so in-place rewrites see the real values.
     async fn collect_extension_request_headers(
         &self,
         url: &str,
     ) -> Option<std::collections::HashMap<String, String>> {
+        self.collect_extension_request_headers_for(url, "main_frame", &[])
+            .await
+    }
+
+    /// Test/introspection hook: run the extension request-header pre-pass
+    /// for one subresource URL and type, returning the resolved rewrites.
+    #[cfg(test)]
+    async fn resolve_extension_subresource_headers(
+        &self,
+        url: &str,
+        resource_type: &str,
+    ) -> std::collections::HashMap<String, String> {
+        self.collect_extension_request_headers_for(url, resource_type, &[])
+            .await
+            .unwrap_or_default()
+    }
+
+    async fn collect_extension_request_headers_for(
+        &self,
+        url: &str,
+        resource_type: &str,
+        base_headers: &[(String, String)],
+    ) -> Option<std::collections::HashMap<String, String>> {
         let ext = self.context.extension.clone()?;
-        if !ext.matches_url(url) {
+        if !ext.wants_url(url) {
             return None;
         }
 
@@ -2133,7 +2323,7 @@ impl Page {
         let mut merged: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
 
-        // --- MV2 path: run onBeforeSendHeaders listeners.
+        // --- MV2 path: run onBeforeSendHeaders listeners for this type.
         let ua = {
             #[cfg(feature = "stealth")]
             {
@@ -2148,16 +2338,27 @@ impl Page {
                 self.context.user_agent.clone()
             }
         };
-        let base_headers = serde_json::json!([
-            {"name": "User-Agent", "value": ua},
-        ]);
+        let mut base: Vec<serde_json::Value> = Vec::new();
+        let mut saw_ua = false;
+        for (name, value) in base_headers {
+            if name.eq_ignore_ascii_case("user-agent") {
+                saw_ua = true;
+            }
+            base.push(serde_json::json!({"name": name, "value": value}));
+        }
+        if !saw_ua {
+            base.push(serde_json::json!({"name": "User-Agent", "value": ua}));
+        }
+        let base_headers = serde_json::Value::Array(base);
+        let wtype = web_request_resource_type(resource_type);
         let collect_expr = format!(
             "(function(){{ try {{ return JSON.stringify(\
                 globalThis.__obscura_ext_collect_request_headers \
-                ? globalThis.__obscura_ext_collect_request_headers({}, {}) : {{}}); \
+                ? globalThis.__obscura_ext_collect_request_headers({}, {}, {{method:\"GET\",type:\"{}\"}}) : {{}}); \
              }} catch(e) {{ return '{{}}'; }} }})()",
             serde_json::to_string(url).unwrap_or_else(|_| "\"\"".into()),
             base_headers,
+            wtype,
         );
         if let Ok(v) = rt.evaluate(&collect_expr) {
             if let Some(s) = v.as_str() {
@@ -2184,7 +2385,11 @@ impl Page {
                 ext.ingest_dnr_rules_json(s);
             }
         }
-        for (k, maybe) in ext.resolved_request_headers(url) {
+        let initiator = self.url.as_ref().map(|u| u.as_str());
+        for (k, maybe) in ext
+            .state
+            .matched_request_headers_initiated(url, wtype, initiator)
+        {
             match maybe {
                 Some(val) => {
                     merged.insert(k, val);
@@ -2754,7 +2959,9 @@ impl Page {
                     );
                     continue;
                 }
-                if self.should_block_url(&full_url) {
+                if self.should_block_url(&full_url)
+                    || self.extension_blocks_url(&full_url, "script")
+                {
                     tracing::info!("Blocked script by interception: {}", full_url);
                     continue;
                 }
@@ -3345,6 +3552,34 @@ impl Page {
             "script execution phase complete",
         );
         self.sync_js_network_events();
+        // Generic document_idle: the extension's onUpdated complete fire,
+        // timer drain, and static manifest content_scripts run after the
+        // page's own scripts, so injected content scripts see page-built
+        // DOM instead of the empty init_js stub. No site checks: the
+        // manifest matches gate injection.
+        self.run_extension_idle_phase();
+    }
+
+    /// Run the extension document_idle phase: fire `tabs.onUpdated`
+    /// complete, drain the shim's timer queue, and inject the static
+    /// manifest `content_scripts` in run_at order. No-op when no
+    /// extension is attached or the url is out of scope. Guarded under
+    /// the watchdog: extension code is user-controlled.
+    pub fn run_extension_idle_phase(&mut self) {
+        let ext = match &self.context.extension {
+            Some(ext) => ext.clone(),
+            None => return,
+        };
+        let url = self.url_string();
+        if !ext.wants_url(&url) {
+            return;
+        }
+        let idle = ext.build_idle_script(&url);
+        if let Some(js) = &mut self.js {
+            if let Err(e) = js.execute_script_guarded("<obscura-ext:idle>", &idle) {
+                tracing::warn!("obscura-ext: idle script failed: {e}");
+            }
+        }
     }
 
     pub async fn navigate(&mut self, url_str: &str) -> Result<(), PageError> {
