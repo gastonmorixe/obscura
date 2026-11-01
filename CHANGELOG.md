@@ -40,8 +40,24 @@ under *Unreleased* land in the next tag.
   the private store that `ObscuraState` allocates by default, then dropping it
   with the realm, so an extension that shaped a request header from
   `localStorage` saw empty data with no error.
+- **The extension bootstrap no longer ships a truncated `starToRegex` line.**
+  The syntax error rejected the whole preload script, so no extension API
+  existed at content-script time. The line is repaired and gated by a syntax
+  check.
 
 ### Added
+
+- **`docs/Extension-host-bpc-paywall-report.md`.** BPC paywall work record:
+  dump matrix, Chrome CDP reference sizes, root causes, fixes, verification
+  numbers, and known limits.
+- **Extension host DNR block and allow.** `BlockRule` parses `block` /
+  `allow` rules with initiator scope. `allow` outranks `block` at equal
+  priority per spec. `redirect` and `upgradeScheme` stay out of scope.
+- **Split extension preload: bootstrap plus idle injection.** The API shell
+  runs early, content scripts run when a DOM exists.
+- **Whitespace cleanup for `--dump text` and `--dump markdown`.**
+  Whitespace only: trailing spaces stripped, 3+ newline runs collapse to 2
+  (max 1 blank line). No content removed.
 
 - **`docs/Upstream-sync-and-stealth-156.md`.** Working record of the upstream
   sync, the Chrome 156 identity change, the evidence for each claim, and the

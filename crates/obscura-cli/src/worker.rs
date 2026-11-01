@@ -194,7 +194,7 @@ async fn main() {
             WorkerCommand::DumpText => {
                 let text = page.with_dom(|dom| {
                     if let Ok(Some(body)) = dom.query_selector("body") {
-                        dom.text_content(body)
+                        collapse_dump_text_whitespace(extract_worker_text(dom, body).trim())
                     } else {
                         String::new()
                     }
@@ -216,4 +216,110 @@ async fn main() {
         let _ = stdout.write_all(out.as_bytes()).await;
         let _ = stdout.flush().await;
     }
+}
+
+/// Match the CLI walker's block-newline text for --dump text (issue #362),
+/// so worker scrape output stays identical to the CLI path.
+fn extract_worker_text(dom: &obscura_dom::DomTree, node_id: obscura_dom::NodeId) -> String {
+    use obscura_dom::NodeData;
+    enum Work {
+        Visit(obscura_dom::NodeId),
+        Newline,
+    }
+    const MAX_NODES: usize = 5_000_000;
+    fn push_children(dom: &obscura_dom::DomTree, id: obscura_dom::NodeId, stack: &mut Vec<Work>) {
+        for child_id in dom.children(id).into_iter().rev() {
+            stack.push(Work::Visit(child_id));
+        }
+    }
+    fn append_segment(result: &mut String, pending_space: &mut bool, contents: &str) {
+        let trimmed = contents.trim_matches(|c: char| matches!(c, '\t' | '\n' | '\x0C' | '\r' | ' '));
+        if trimmed.is_empty() {
+            if contents.chars().any(|c| matches!(c, '\t' | '\n' | '\x0C' | '\r' | ' ')) {
+                *pending_space = true;
+            }
+            return;
+        }
+        let begins_with_space = contents.chars().next().is_some_and(|c| c.is_whitespace());
+        let ends_with_space = result.chars().next_back().is_some_and(char::is_whitespace);
+        if (*pending_space || begins_with_space) && !result.is_empty() && !ends_with_space {
+            result.push(' ');
+        }
+        result.push_str(trimmed);
+        *pending_space = contents.chars().next_back().is_some_and(|c| c.is_whitespace());
+    }
+    let mut result = String::new();
+    let mut pending_space = false;
+    let mut stack: Vec<Work> = vec![Work::Visit(node_id)];
+    let mut visited = 0usize;
+    while let Some(work) = stack.pop() {
+        let id = match work {
+            Work::Newline => {
+                result.push('\n');
+                pending_space = false;
+                continue;
+            }
+            Work::Visit(id) => id,
+        };
+        visited += 1;
+        if visited > MAX_NODES {
+            break;
+        }
+        let Some(node) = dom.get_node(id) else {
+            continue;
+        };
+        match &node.data {
+            NodeData::Text { contents } => append_segment(&mut result, &mut pending_space, contents),
+            NodeData::Element { name, .. } => {
+                let tag = name.local.as_ref();
+                if matches!(
+                    tag,
+                    "script" | "style" | "noscript" | "nav" | "header" | "footer" | "aside"
+                ) {
+                    continue;
+                }
+                let is_block = matches!(
+                    tag,
+                    "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "li" | "tr"
+                        | "br" | "hr" | "blockquote" | "pre" | "section" | "article"
+                        | "header" | "footer" | "nav" | "main" | "aside" | "figure"
+                        | "figcaption" | "table" | "thead" | "tbody" | "tfoot" | "dl"
+                        | "dt" | "dd" | "ul" | "ol"
+                );
+                if is_block {
+                    result.push('\n');
+                    pending_space = false;
+                    stack.push(Work::Newline);
+                }
+                push_children(dom, id, &mut stack);
+            }
+            _ => push_children(dom, id, &mut stack),
+        }
+    }
+    result
+}
+
+/// Generic whitespace cleanup for DumpText. Whitespace only: strips trailing
+/// spaces per line and collapses 3+ consecutive newlines to 2 (max 1 blank
+/// line). Single blank lines stay. No content is removed.
+fn collapse_dump_text_whitespace(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut blanks = 0usize;
+    for raw_line in text.split('\n') {
+        let line = raw_line.trim_end();
+        if line.is_empty() {
+            blanks += 1;
+            if blanks <= 1 {
+                out.push('\n');
+            }
+        } else {
+            blanks = 0;
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    while out.ends_with('\n') {
+        out.pop();
+    }
+    out
 }

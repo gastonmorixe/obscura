@@ -22,7 +22,7 @@
 //!   For an automation tool that's acceptable; we're not trying to
 //!   masquerade as "no extension installed".
 //!
-//! The build_preload_script() output is a single concatenated string:
+//! The bootstrap/idle builders produce two concatenated strings:
 //!
 //!   1. `__obscura_ext_bundle` registry: a JSON-encoded map of every
 //!      script file in the bundle, keyed by manifest-relative path.
@@ -33,9 +33,11 @@
 //!      most are graceful no-ops.
 //!   3. Concatenated content of every script in
 //!      `manifest.background.scripts` (MV2) or just `service_worker` (MV3).
-//!   4. Trigger: a single synthesised `tabs.onUpdated` event for the
-//!      current page, which is the canonical hook point extensions
-//!      register their per-page work on.
+//!   4. Idle trigger (separate `build_idle_script`, after the document's
+//!      own scripts have run): a single synthesised `tabs.onUpdated`
+//!      event for the current page, which is the canonical hook point
+//!      extensions register their per-page work on, followed by the timer
+//!      drain and the static manifest `content_scripts` in `run_at` order.
 //!
 //! The bg listener then calls `tabs.executeScript`/`scripting.executeScript`
 //! which our shim implements by looking the requested files up in the
@@ -222,6 +224,27 @@ impl ExtensionRuntime {
 
     /// Does this extension want to run on the given URL? Used by
     /// `obscura-browser` to short-circuit injection on out-of-scope hosts.
+    /// True when the host_permissions match OR any static manifest
+    /// `content_scripts` entry matches: a bundle that only declares
+    /// `content_scripts.matches` must still inject on those hosts.
+    pub fn wants_url(&self, url: &str) -> bool {
+        if self.matches_url(url) {
+            return true;
+        }
+        let Ok(parsed) = Url::parse(url) else {
+            return false;
+        };
+        self.bundle.manifest.content_scripts.iter().any(|entry| {
+            entry
+                .matches
+                .iter()
+                .filter_map(|p| MatchPattern::parse(p))
+                .any(|p| p.matches_url(&parsed))
+        })
+    }
+
+    /// Does this extension want to run on the given URL? Used by
+    /// `obscura-browser` to short-circuit injection on out-of-scope hosts.
     pub fn matches_url(&self, url: &str) -> bool {
         let parsed = match Url::parse(url) {
             Ok(u) => u,
@@ -230,12 +253,17 @@ impl ExtensionRuntime {
         self.host_patterns.iter().any(|p| p.matches_url(&parsed))
     }
 
-    /// Build the JS preload script to inject into the current page's V8
-    /// realm. Idempotent — same input URL produces same string. Caller
-    /// is responsible for guarding against double-injection (Obscura's
-    /// `Page::init_js` rebuilds the realm on every nav, so a single call
-    /// per nav is correct).
-    pub fn build_preload_script(&self, url: &str) -> String {
+    /// Build the bootstrap JS injected into the current page's V8
+    /// realm in `init_js`, before any page script runs: shim plus
+    /// background scripts only. It deliberately does NOT fire
+    /// `tabs.onUpdated` or drain timers. That is the document_idle phase
+    /// (`build_idle_script`), after the document's own scripts have run,
+    /// so dynamically injected content scripts see page-built DOM instead
+    /// of an empty stub. Idempotent — same input URL produces same string.
+    /// Caller is responsible for guarding against double-injection
+    /// (Obscura's `Page::init_js` rebuilds the realm on every nav, so a
+    /// single call per nav is correct).
+    pub fn build_bootstrap_script(&self, url: &str) -> String {
         // Build the script files registry. Only JS files are exposed —
         // these are the ones the extension might pass to
         // `chrome.tabs.executeScript` / `chrome.scripting.executeScript`
@@ -388,6 +416,12 @@ try {
         // adds per-setTimeout / per-drain logging — useful when chasing
         // listener-registration ordering bugs, off by default to keep
         // info-level output readable.
+        //
+        // The bootstrap does NOT fire tabs.onUpdated or drain timers: the
+        // document is still an empty stub at this point (init_js runs
+        // before parser scripts), so injected content scripts would see
+        // no DOM. That is the document_idle phase (build_idle_script),
+        // after the document's own scripts have run.
         format!(
             r#"
 (function obscuraExtensionBootstrap() {{
@@ -398,7 +432,7 @@ try {
   globalThis.__obscura_ext_id = {extension_id_json};
   globalThis.__obscura_ext_url = {url_json};
   globalThis.__obscura_ext_mv = {manifest_version};
-  console.log("obscura-ext: preload starting (" + Object.keys(globalThis.__obscura_ext_bundle).length + " bundled scripts)");
+  console.log("obscura-ext: bootstrap starting (" + Object.keys(globalThis.__obscura_ext_bundle).length + " bundled scripts)");
   try {{
     {shim}
   }} catch (e) {{
@@ -410,26 +444,129 @@ try {
   }} catch (e) {{
     console.error("obscura-ext: background scripts failed:", e && e.stack || e);
   }}
+}})();
+"#
+        )
+    }
+
+    /// Build the document_idle script: the fire-and-drain half that used to
+    /// run inside the bootstrap. The host runs this AFTER the document's own
+    /// scripts, so injected content scripts see page-built DOM. Idempotent:
+    /// a second call re-fires onUpdated and re-injects static scripts but
+    /// the `__obscura_ext_idle_fired` guard skips the background timer
+    /// drain, so timers queued after the first idle fire run at the next
+    /// explicit idle call instead of doubling.
+    pub fn build_idle_script(&self, url: &str) -> String {
+        let url_json = serde_json::to_string(url).unwrap();
+        let static_script = self.build_static_content_scripts_script(url);
+        format!(
+            r#"
+(function obscuraExtensionIdle() {{
+  if (typeof globalThis.__obscura_ext_fire_loaded !== "function") return;
+  if (typeof globalThis.__obscura_ext_idle_fired === "undefined") {{
+    globalThis.__obscura_ext_idle_fired = false;
+  }}
   // Synthesise `tabs.onUpdated` for the current page so the extension's
   // background listener fires its per-page hook. That listener
   // typically queues a setTimeout chain to inject content scripts and
-  // dispatch a background→content-script config message; we then
-  // drain that
-  // queue synchronously below — see chrome_shim.js's setTimeout
-  // override for the rationale (real-browser async timing doesn't
+  // dispatch a background to content-script config message. We then
+  // drain that queue synchronously below. See chrome_shim.js's setTimeout
+  // override for the rationale (real-browser async timing does not
   // survive Obscura's single-shot preload, so we materialise it as a
   // synchronous queue we can flush before returning).
   try {{
-    globalThis.__obscura_ext_fire_loaded(globalThis.__obscura_ext_url);
-    if (typeof globalThis.__obscura_ext_drain_timers === "function") {{
-      const drained = globalThis.__obscura_ext_drain_timers(50);
-      console.log("obscura-ext: drained " + drained + " timers, onUpdated listeners=" + globalThis.__obscura_ext_onupdated_count());
+    globalThis.__obscura_ext_fire_loaded({url_json});
+    if (!globalThis.__obscura_ext_idle_fired) {{
+      globalThis.__obscura_ext_idle_fired = true;
+      if (typeof globalThis.__obscura_ext_drain_timers === "function") {{
+        const drained = globalThis.__obscura_ext_drain_timers(50);
+        console.log("obscura-ext: idle drained " + drained + " timers, onUpdated listeners=" + globalThis.__obscura_ext_onupdated_count());
+      }}
+    }} else {{
+      console.log("obscura-ext: idle re-fire (timers already drained)");
     }}
   }} catch (e) {{
-    console.error("obscura-ext: fire/drain failed:", e && e.stack || e);
+    console.error("obscura-ext: idle fire/drain failed:", e && e.stack || e);
+  }}
+  try {{
+    {static_script}
+  }} catch (e) {{
+    console.error("obscura-ext: static content_scripts failed:", e && e.stack || e);
   }}
 }})();
 "#
+        )
+    }
+
+    /// JS for the static manifest `content_scripts` that match `url`, in
+    /// `run_at` order: `document_start` first, then `document_end`, then
+    /// `document_idle` (the manifest default). Each entry runs its `js`
+    /// files in order through the same bundle-registry lookup that
+    /// `tabs.executeScript` uses, so a missing file warns and skips
+    /// instead of aborting the rest.
+    fn build_static_content_scripts_script(&self, url: &str) -> String {
+        let parsed = Url::parse(url);
+        let mut phases: [Vec<&crate::manifest::ContentScriptEntry>; 3] =
+            [Vec::new(), Vec::new(), Vec::new()];
+        for entry in &self.bundle.manifest.content_scripts {
+            let matched = match &parsed {
+                Ok(u) => entry
+                    .matches
+                    .iter()
+                    .filter_map(|p| MatchPattern::parse(p))
+                    .any(|p| p.matches_url(u)),
+                Err(_) => false,
+            };
+            if !matched {
+                continue;
+            }
+            let slot = match entry.run_at.as_str() {
+                "document_start" => 0,
+                "document_end" => 1,
+                _ => 2,
+            };
+            phases[slot].push(entry);
+        }
+        let mut out = String::new();
+        for (phase, entries) in ["document_start", "document_end", "document_idle"]
+            .iter()
+            .zip(phases.iter())
+        {
+            for entry in entries {
+                for file in &entry.js {
+                    let file_json = serde_json::to_string(file).unwrap_or_else(|_| "\"\"".into());
+                    out.push_str(&format!(
+                        r#"
+try {{
+  if (globalThis.__obscura_ext_bundle && typeof globalThis.__obscura_ext_bundle[{file_json}] === "string") {{
+    (0, eval)(globalThis.__obscura_ext_bundle[{file_json}]);
+    console.log("obscura-ext: static {phase} content script ran: " + {file_json});
+  }} else {{
+    console.warn("obscura-ext: static content script not in bundle: " + {file_json});
+  }}
+}} catch (e) {{
+  console.error("obscura-ext: static content script failed (" + {file_json} + "):", e && e.stack || e);
+}}
+"#
+                    ));
+                }
+            }
+        }
+        if out.is_empty() {
+            out.push_str("// obscura-ext: no static content_scripts match this url\n");
+        }
+        out
+    }
+
+    /// Kept for the request-header pre-pass and callers that need the
+    /// legacy one-shot order (bootstrap plus idle in a single realm, e.g.
+    /// an empty stub DOM). Equivalent to `build_bootstrap_script` followed
+    /// by `build_idle_script` for the same url.
+    pub fn build_preload_script(&self, url: &str) -> String {
+        format!(
+            "{}{}",
+            self.build_bootstrap_script(url),
+            self.build_idle_script(url)
         )
     }
 
@@ -448,9 +585,8 @@ try {
 
     /// Parse a JSON array of `declarativeNetRequest` rules (as produced by
     /// [`DNR_HARVEST_EXPR`]) and store every `modifyHeaders` request-header
-    /// rule in the extension state. Other rule types are ignored here (block
-    /// rules go through the separate `dnr_block` path). Returns the count of
-    /// header rules ingested.
+    /// rule and every `block` / `allow` rule in the extension state.
+    /// Anything else is ignored. Returns the count of rules ingested.
     pub fn ingest_dnr_rules_json(&self, json: &str) -> usize {
         let parsed: Value = match serde_json::from_str(json) {
             Ok(v) => v,
@@ -469,19 +605,50 @@ try {
             }
         }
         if n > 0 {
-            tracing::info!("obscura-ext: ingested {n} declarativeNetRequest header rule(s)");
+            tracing::info!("obscura-ext: ingested {n} declarativeNetRequest rule(s)");
         }
         n
     }
 
+    /// Whether a subresource fetch of `url` (as `resource_type`, e.g.
+    /// `"script"`) initiated by the document at `initiator_url` is cancelled
+    /// by the extension's stored `block` / `allow` rules. False when no
+    /// extension rule matches.
+    pub fn is_blocked(
+        &self,
+        url: &str,
+        resource_type: &str,
+        initiator_url: Option<&str>,
+    ) -> bool {
+        self.state.is_blocked(url, resource_type, initiator_url)
+    }
+
     /// Resolve the request-header rewrites the extension wants applied to a
-    /// top-level document fetch of `url`. Returns `{header => Some(value)}`
-    /// to set and `{header => None}` to remove. Empty when nothing matches.
+    /// fetch of `url` requested as `resource_type` (e.g. `"main_frame"`,
+    /// `"script"`, `"stylesheet"`). Returns `{header => Some(value)}` to set
+    /// and `{header => None}` to remove. Empty when nothing matches.
     pub fn resolved_request_headers(
         &self,
         url: &str,
     ) -> std::collections::HashMap<String, Option<String>> {
-        self.state.matched_request_headers(url, "main_frame")
+        self.resolved_request_headers_for(url, "main_frame")
+    }
+
+    /// Same as [`resolved_request_headers`], but resolved against an explicit
+    /// subresource type so stylesheets, scripts, XHR, and images get the
+    /// rules the extension scoped to them.
+    pub fn resolved_request_headers_for(
+        &self,
+        url: &str,
+        resource_type: &str,
+    ) -> std::collections::HashMap<String, Option<String>> {
+        let initiated = self
+            .state
+            .matched_request_headers_initiated(url, resource_type, None);
+        if !initiated.is_empty() {
+            return initiated;
+        }
+        self.state.matched_request_headers(url, resource_type)
     }
 }
 
@@ -524,7 +691,7 @@ mod tests {
     fn ingest_then_resolve_referer_for_wsj() {
         let rt = runtime_for("*://*.wsj.com/*");
         let n = rt.ingest_dnr_rules_json(WSJ_HARVEST);
-        assert_eq!(n, 1, "only the modifyHeaders rule should be ingested");
+        assert_eq!(n, 2, "both the modifyHeaders and the block rule should be ingested");
 
         let hdrs = rt.resolved_request_headers(
             "https://www.wsj.com/tech/ai/meta-keeps-delaying-f8569c8c",
@@ -584,5 +751,145 @@ mod tests {
         // Guard against accidental truncation of the const.
         assert!(ExtensionRuntime::DNR_HARVEST_EXPR.contains("__obscura_ext_dnr_rules"));
         assert!(ExtensionRuntime::DNR_HARVEST_EXPR.contains("JSON.stringify"));
+    }
+
+    fn runtime_with_static_scripts() -> ExtensionRuntime {
+        let dir = tempfile::Builder::new().prefix("obscura-ext-static-test").tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("manifest.json"),
+            r#"{ "manifest_version": 2, "name": "T", "version": "1.0",
+                 "background": { "scripts": ["bg.js"] },
+                 "permissions": ["*://example.test/*"],
+                 "content_scripts": [
+                   { "matches": ["*://example.test/*"], "js": ["early.js"], "run_at": "document_start" },
+                   { "matches": ["*://example.test/*"], "js": ["late.js"] },
+                   { "matches": ["*://other.test/*"], "js": ["skipped.js"] }
+                 ] }"#,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("bg.js"), "// bg").unwrap();
+        std::fs::write(dir.path().join("early.js"), "// early").unwrap();
+        std::fs::write(dir.path().join("late.js"), "// late").unwrap();
+        let bundle = Bundle::load(dir.path()).expect("load");
+        std::mem::forget(dir);
+        ExtensionRuntime::new(Arc::new(bundle))
+    }
+
+    #[test]
+    fn bootstrap_defers_fire_and_drain_to_idle() {
+        let rt = runtime_with_static_scripts();
+        let url = "https://example.test/article";
+        let bootstrap = rt.build_bootstrap_script(url);
+        assert!(
+            !bootstrap.contains("__obscura_ext_fire_loaded(\"https"),
+            "bootstrap must not fire onUpdated: it runs on the empty stub DOM"
+        );
+        assert!(
+            !bootstrap.contains("__obscura_ext_drain_timers(50)"),
+            "bootstrap must not drain timers: that is the idle phase"
+        );
+        let idle = rt.build_idle_script(url);
+        assert!(idle.contains("__obscura_ext_fire_loaded("));
+        assert!(idle.contains("__obscura_ext_drain_timers(50)"));
+        assert!(idle.contains("early.js"));
+        assert!(idle.contains("late.js"));
+        assert!(!idle.contains("skipped.js"));
+        // run_at ordering: document_start entry before document_idle default.
+        assert!(idle.find("early.js").unwrap() < idle.find("late.js").unwrap());
+    }
+
+    #[test]
+    fn preload_is_bootstrap_plus_idle() {
+        let rt = runtime_with_static_scripts();
+        let url = "https://example.test/article";
+        assert_eq!(
+            rt.build_preload_script(url),
+            format!(
+                "{}{}",
+                rt.build_bootstrap_script(url),
+                rt.build_idle_script(url)
+            )
+        );
+    }
+
+    #[test]
+    fn bootstrap_with_bpc_shaped_bundle_parses() {
+        // BPC-shaped bundle: bg script plus registry files holding
+        // backticks, template placeholders, and a closing script tag.
+        // build_bootstrap_script must emit JS that still parses.
+        let dir = tempfile::Builder::new().prefix("obscura-ext-bpc-parse-test").tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("manifest.json"),
+            r#"{ "manifest_version": 2, "name": "T", "version": "1.0",
+                 "background": { "scripts": ["sites.js", "background.js"] },
+                 "permissions": ["*://example.test/*"] }"#,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("sites.js"), "var defaultSites = {};").unwrap();
+        std::fs::write(
+            dir.path().join("background.js"),
+            "importScripts('sites.js');\nuse(grouped_sites);",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("contentScript.js"),
+            "const t = `tick ${1 + 1} back\\`tick`;\n// </script>\nwindow.__x = 1;",
+        )
+        .unwrap();
+        let bundle = Bundle::load(dir.path()).expect("load");
+        std::mem::forget(dir);
+        let rt = ExtensionRuntime::new(std::sync::Arc::new(bundle));
+        let bootstrap = rt.build_bootstrap_script("https://example.test/article");
+        // The chrome shim itself must survive intact: the starToRegex
+        // escape helper lost its tail in a bad edit once and broke every
+        // bootstrap with `Invalid or unexpected token` at line ~351.
+        assert!(
+            bootstrap.contains("starToRegex"),
+            "shim starToRegex helper missing from bootstrap"
+        );
+        let escape_head = "p.replace(/[.+?^";
+        assert!(bootstrap.contains(escape_head), "starToRegex escape call is truncated");
+        // The registry is JSON: extract and re-parse it to prove the
+        // backtick / ${} / </script> content survived escaping.
+        let marker = "globalThis.__obscura_ext_bundle = ";
+        let mb = bootstrap.find(marker).expect("registry marker");
+        let rest = &bootstrap[mb + marker.len()..];
+        let end = rest.find(";\n").expect("registry end");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&rest[..end]).expect("registry must be valid JSON");
+        let cs = parsed
+            .get("contentScript.js")
+            .and_then(|v| v.as_str())
+            .expect("contentScript.js in registry");
+        assert!(cs.contains("tick ${1 + 1}"), "registry lost template content: {cs}");
+        // Exact fixed line: the truncated edit dropped everything from
+        // `"\\` onward. Presence of the full tail proves the shim
+        // survived intact. Built with concat to keep `$&` out of trouble.
+        let fixed_tail = ["\\", "$", "&", "\"", ");"].concat();
+        assert!(
+            bootstrap.contains(&fixed_tail),
+            "starToRegex escape tail missing from bootstrap"
+        );
+    }
+
+    #[test]
+    fn wants_url_covers_static_matches_without_host_permissions() {
+        let dir = tempfile::Builder::new().prefix("obscura-ext-wants-test").tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("manifest.json"),
+            r#"{ "manifest_version": 2, "name": "T", "version": "1.0",
+                 "permissions": ["storage"],
+                 "content_scripts": [
+                   { "matches": ["*://example.test/*"], "js": ["c.js"] }
+                 ] }"#,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("c.js"), "// c").unwrap();
+        let bundle = Bundle::load(dir.path()).expect("load");
+        std::mem::forget(dir);
+        let rt = ExtensionRuntime::new(Arc::new(bundle));
+        assert!(!rt.matches_url("https://example.test/x"));
+        assert!(rt.wants_url("https://example.test/x"));
+        assert!(!rt.wants_url("https://other.test/x"));
     }
 }

@@ -279,54 +279,149 @@
   }
 
   // ---- webRequest: record listeners so the host can run the
-  // request-header rewrites (blocking `onBeforeSendHeaders`) that MV2
-  // paywall extensions use to set Referer / User-Agent on the top-level
-  // document. The host invokes `__obscura_ext_collect_request_headers`
-  // BEFORE fetching the document, applies the result to the outbound
-  // request, and the page comes back unlocked. Listeners for other events
-  // are still recorded (harmlessly unused) so bg code paths don't break.
+  // request hooks that MV2 paywall extensions use: blocking
+  // `onBeforeRequest` (cancel / redirect), `onBeforeSendHeaders`
+  // (Referer / User-Agent rewrites), and `onHeadersReceived`
+  // (response header rewrites). The host invokes the
+  // `__obscura_ext_collect_*` helpers below per request (document and
+  // subresources alike) and applies the result to the outbound fetch
+  // or the inbound response. No site checks here: listener `urls` /
+  // `types` filters gate applicability per request.
   globalThis.__obscura_ext_wr_listeners = globalThis.__obscura_ext_wr_listeners || {};
   function _mkWREvent(name) {
     const reg = globalThis.__obscura_ext_wr_listeners;
     reg[name] = reg[name] || [];
     return {
       addListener(fn /*, filter, extraInfoSpec */) {
-        if (typeof fn === "function") reg[name].push(fn);
+        if (typeof fn !== "function") return;
+        const filter = arguments.length > 1 ? arguments[1] : undefined;
+        const extra = arguments.length > 2 ? arguments[2] : undefined;
+        reg[name].push({ fn: fn, filter: filter, extra: extra });
       },
       removeListener(fn) {
         const arr = reg[name];
         if (!arr) return;
-        const i = arr.indexOf(fn);
+        const i = arr.findIndex(function (e) { return e && e.fn === fn; });
         if (i >= 0) arr.splice(i, 1);
       },
-      hasListener(fn) { return (reg[name] || []).includes(fn); },
+      hasListener(fn) { return (reg[name] || []).some(function (e) { return e && e.fn === fn; }); },
       hasListeners() { return (reg[name] || []).length > 0; },
       __name: name,
     };
   }
 
-  // Run all registered `onBeforeSendHeaders` listeners against a synthetic
-  // request for `url` (resourceType `main_frame`), threading each listener's
-  // `{requestHeaders}` return into the next, exactly as Chrome does for
-  // blocking listeners. `baseHeaders` is an array of {name,value} the host
-  // will actually send (so the extension can rewrite an existing Referer /
-  // User-Agent in place). Returns the final header array as a {name:value}
-  // object (last write wins). Safe to call with no listeners — returns {}.
-  globalThis.__obscura_ext_collect_request_headers = function (url, baseHeaders) {
+  // True when `details` passes the listener's `filter` ({urls, types}).
+  // Unknown filter shapes pass (permissive): a listener that registers
+  // without a filter sees every request.
+  function _wrFilterMatches(entry, details) {
+    const filter = entry && entry.filter;
+    if (!filter || typeof filter !== "object") return true;
+    if (Array.isArray(filter.urls) && filter.urls.length > 0) {
+      let ok = false;
+      for (const pat of filter.urls) {
+        if (typeof pat === "string" && _wrUrlMatches(pat, details.url)) { ok = true; break; }
+      }
+      if (!ok) return false;
+    }
+    if (Array.isArray(filter.types) && filter.types.length > 0) {
+      if (!filter.types.includes(details.type)) return false;
+    }
+    return true;
+  }
+
+  // Minimal match-pattern test for `*://*.host/*`-style filters.
+  // Covers scheme/host/path with `*` wildcards. Anything unparseable
+  // falls back to a substring test so we never wrongly skip a listener.
+  function _wrUrlMatches(pattern, url) {
+    try {
+      if (pattern === "<all_urls>") return true;
+      const starToRegex = function (s) {
+        return s.split("*").map(function (p) {
+          return p.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+        }).join(".*");
+      };
+      const m = String(pattern).match(/^(\*|https?|wss?|ftp|file):\/\/([^/]*)\/(.*)$/);
+      if (!m) return String(url).includes(pattern.replace(/\*/g, ""));
+      const schemePat = m[1], hostPat = m[2], pathPat = m[3];
+      const u = new URL(String(url));
+      const scheme = u.protocol.replace(/:$/, "");
+      if (schemePat !== "*" && schemePat !== scheme) return false;
+      let hostRe = starToRegex(hostPat);
+      if (hostPat.startsWith("*.")) hostRe = "(.*\\.)?" + starToRegex(hostPat.slice(2));
+      if (!new RegExp("^" + hostRe + "$", "i").test(u.hostname)) return false;
+      const path = u.pathname + u.search + u.hash;
+      return new RegExp("^/" + starToRegex(pathPat) + "$").test(path) ||
+        new RegExp("^" + starToRegex(pathPat) + "$").test(path);
+    } catch (e) {
+      return String(url).includes(String(pattern).replace(/\*/g, ""));
+    }
+  }
+
+  // Run all registered `onBeforeRequest` listeners against a request.
+  // `opts` carries {method, type, tabId, frameId}. Thread each listener's
+  // `{redirectUrl}` into the details URL (first redirect wins, later
+  // listeners see the new URL). Returns {cancel, redirectUrl}: redirectUrl
+  // is set only when the final URL differs from the input.
+  globalThis.__obscura_ext_collect_on_before_request = function (url, opts) {
+    const reg = globalThis.__obscura_ext_wr_listeners || {};
+    const listeners = reg["onBeforeRequest"] || [];
+    opts = opts || {};
+    const details = {
+      url: url,
+      method: opts.method || "GET",
+      type: opts.type || "main_frame",
+      tabId: (globalThis.__obscura_ext_tab_id || 1),
+      frameId: (opts.frameId != null ? opts.frameId : 0),
+      requestId: String(Date.now()),
+      timeStamp: Date.now(),
+    };
+    const startUrl = String(url);
+    for (const entry of listeners) {
+      const fn = entry && entry.fn ? entry.fn : entry;
+      if (typeof fn !== "function") continue;
+      if (entry && entry.fn && !_wrFilterMatches(entry, details)) continue;
+      try {
+        const ret = fn(details);
+        if (!ret || typeof ret !== "object") continue;
+        if (ret.cancel === true) return { cancel: true };
+        if (typeof ret.redirectUrl === "string" && ret.redirectUrl && ret.redirectUrl !== details.url) {
+          details.url = ret.redirectUrl;
+        }
+      } catch (e) {
+        console.error("obscura-ext: onBeforeRequest listener threw:", e && e.stack || e);
+      }
+    }
+    if (details.url !== startUrl) return { cancel: false, redirectUrl: details.url };
+    return { cancel: false };
+  };
+
+  // Run all registered `onBeforeSendHeaders` listeners against a request.
+  // `opts` carries {method, type, tabId, frameId}; `baseHeaders` is an
+  // array of {name,value} the host will actually send (so the extension
+  // can rewrite an existing Referer / User-Agent in place). Threads each
+  // listener's `{requestHeaders}` return into the next, exactly as Chrome
+  // does for blocking listeners. Returns the final header array as a
+  // {name:value} object (last write wins). Safe to call with no
+  // listeners — returns {}.
+  globalThis.__obscura_ext_collect_request_headers = function (url, baseHeaders, opts) {
     const reg = globalThis.__obscura_ext_wr_listeners || {};
     const listeners = reg["onBeforeSendHeaders"] || [];
+    opts = opts || {};
     let headers = Array.isArray(baseHeaders) ? baseHeaders.map(h => ({ name: h.name, value: h.value })) : [];
     const details = {
       url: url,
-      method: "GET",
-      type: "main_frame",
+      method: (opts.method || "GET"),
+      type: (opts.type || "main_frame"),
       tabId: (globalThis.__obscura_ext_tab_id || 1),
-      frameId: 0,
+      frameId: (opts.frameId != null ? opts.frameId : 0),
       requestId: String(Date.now()),
       timeStamp: Date.now(),
       requestHeaders: headers,
     };
-    for (const fn of listeners) {
+    for (const entry of listeners) {
+      const fn = entry && entry.fn ? entry.fn : entry;
+      if (typeof fn !== "function") continue;
+      if (entry && entry.fn && !_wrFilterMatches(entry, details)) continue;
       try {
         const ret = fn(details);
         if (ret && Array.isArray(ret.requestHeaders)) {
@@ -338,6 +433,47 @@
     }
     const out = {};
     for (const h of details.requestHeaders) {
+      if (h && typeof h.name === "string") out[h.name] = h.value;
+    }
+    return out;
+  };
+
+  // Run all registered `onHeadersReceived` listeners against a response.
+  // `responseHeaders` is an array of {name,value} the host received.
+  // `opts` carries {method, type, tabId, frameId, statusCode}. Threads each
+  // listener's `{responseHeaders}` return into the next. Returns the final
+  // header array as a {name:value} object. Safe with no listeners.
+  globalThis.__obscura_ext_collect_on_headers_received = function (url, responseHeaders, opts) {
+    const reg = globalThis.__obscura_ext_wr_listeners || {};
+    const listeners = reg["onHeadersReceived"] || [];
+    opts = opts || {};
+    let headers = Array.isArray(responseHeaders) ? responseHeaders.map(h => ({ name: h.name, value: h.value })) : [];
+    const details = {
+      url: url,
+      method: (opts.method || "GET"),
+      type: (opts.type || "main_frame"),
+      tabId: (globalThis.__obscura_ext_tab_id || 1),
+      frameId: (opts.frameId != null ? opts.frameId : 0),
+      requestId: String(Date.now()),
+      timeStamp: Date.now(),
+      statusCode: (opts.statusCode || 200),
+      responseHeaders: headers,
+    };
+    for (const entry of listeners) {
+      const fn = entry && entry.fn ? entry.fn : entry;
+      if (typeof fn !== "function") continue;
+      if (entry && entry.fn && !_wrFilterMatches(entry, details)) continue;
+      try {
+        const ret = fn(details);
+        if (ret && Array.isArray(ret.responseHeaders)) {
+          details.responseHeaders = ret.responseHeaders;
+        }
+      } catch (e) {
+        console.error("obscura-ext: onHeadersReceived listener threw:", e && e.stack || e);
+      }
+    }
+    const out = {};
+    for (const h of details.responseHeaders) {
       if (h && typeof h.name === "string") out[h.name] = h.value;
     }
     return out;
@@ -420,25 +556,127 @@
     };
   }
 
-  // ---- cookies: extensions read cookies post-load for things like
-  // scrubbing per-site state counters. Stubbed to "empty" semantics.
-  // Wiring this to the real `obscura-net::CookieJar` is straightforward
-  // but not done — see docs/extensions.md.
+  // ---- cookies: backed by the page's own `document.cookie`, which the
+  // host wires to the real `obscura-net::CookieJar` (see `op_get_cookies` /
+  // `op_set_cookie`). Extensions that scrub per-site state counters read
+  // and write the same jar the network stack sends, so set/remove here
+  // is observable on subsequent requests. HttpOnly cookies stay invisible
+  // (document.cookie cannot see them); filtering by name/domain/path/url
+  // follows the `chrome.cookies` query shape generically.
+  function _cookieHost(url) {
+    try { return new URL(String(url)).hostname; } catch (e) { return ""; }
+  }
+  function _currentCookieHost() {
+    try {
+      if (typeof document !== "undefined" && document.URL) return _cookieHost(document.URL);
+    } catch (e) {}
+    return _cookieHost(globalThis.__obscura_ext_url || "");
+  }
+  function _parseDocCookies() {
+    let raw = "";
+    try { raw = (typeof document !== "undefined") ? document.cookie : ""; } catch (e) { raw = ""; }
+    const out = [];
+    if (!raw) return out;
+    for (const part of String(raw).split(";")) {
+      const idx = part.indexOf("=");
+      if (idx < 0) continue;
+      const name = part.slice(0, idx).trim();
+      if (!name) continue;
+      out.push({ name: name, value: part.slice(idx + 1).trim() });
+    }
+    return out;
+  }
+  function _cookieQueryMatches(cookie, host, query) {
+    query = query || {};
+    if (query.name != null && cookie.name !== String(query.name)) return false;
+    if (query.domain != null) {
+      const d = String(query.domain).replace(/^\./, "").toLowerCase();
+      const h = host.toLowerCase();
+      if (!(h === d || h.endsWith("." + d))) return false;
+    }
+    if (query.path != null && !"/".startsWith(String(query.path))) return false;
+    if (query.secure != null && !!query.secure !== false) {
+      // document.cookie carries no secure flag; a secure:true query can only
+      // match when the cookie came from a secure context, which we cannot
+      // tell here, so treat it as a non-match rather than a wrong match.
+      return false;
+    }
+    if (query.url != null && _cookieHost(query.url).toLowerCase() !== host.toLowerCase()) return false;
+    return true;
+  }
   function _cookiesGetAll(query, cb) {
-    if (typeof cb === "function") Promise.resolve().then(() => cb([]));
-    return Promise.resolve([]);
+    let result = [];
+    try {
+      const host = _currentCookieHost();
+      result = _parseDocCookies()
+        .filter(function (c) { return _cookieQueryMatches(c, host, query); })
+        .map(function (c) {
+          return { name: c.name, value: c.value, domain: host, path: "/",
+                   secure: false, httpOnly: false, session: true };
+        });
+    } catch (e) {
+      console.error("obscura-ext: cookies.getAll failed:", e && e.stack || e);
+    }
+    if (typeof cb === "function") Promise.resolve().then(() => cb(result));
+    return Promise.resolve(result);
   }
   function _cookiesGet(query, cb) {
-    if (typeof cb === "function") Promise.resolve().then(() => cb(null));
-    return Promise.resolve(null);
+    let result = null;
+    try {
+      const host = _currentCookieHost();
+      const found = _parseDocCookies().find(function (c) { return _cookieQueryMatches(c, host, query); });
+      if (found) {
+        result = { name: found.name, value: found.value, domain: host, path: "/",
+                   secure: false, httpOnly: false, session: true };
+      }
+    } catch (e) {
+      console.error("obscura-ext: cookies.get failed:", e && e.stack || e);
+    }
+    if (typeof cb === "function") Promise.resolve().then(() => cb(result));
+    return Promise.resolve(result);
   }
   function _cookiesSet(details, cb) {
-    if (typeof cb === "function") Promise.resolve().then(() => cb(details));
-    return Promise.resolve(details);
+    let result = details || null;
+    try {
+      details = details || {};
+      const name = String(details.name || "");
+      const value = details.value != null ? String(details.value) : "";
+      if (!name) throw new Error("cookies.set requires a name");
+      let str = name + "=" + value;
+      str += "; path=" + (details.path || "/");
+      if (details.domain) str += "; domain=" + details.domain;
+      if (details.expirationDate != null) {
+        str += "; expires=" + new Date(Number(details.expirationDate) * 1000).toUTCString();
+      }
+      if (details.secure) str += "; secure";
+      if (typeof document !== "undefined") document.cookie = str;
+      const host = details.url ? _cookieHost(details.url) : _currentCookieHost();
+      result = { name: name, value: value, domain: String(details.domain || host).replace(/^\./, ""),
+                 path: details.path || "/", secure: !!details.secure,
+                 httpOnly: !!details.httpOnly, session: details.expirationDate == null };
+    } catch (e) {
+      console.error("obscura-ext: cookies.set failed:", e && e.stack || e);
+      result = null;
+    }
+    if (typeof cb === "function") Promise.resolve().then(() => cb(result));
+    return Promise.resolve(result);
   }
   function _cookiesRemove(details, cb) {
-    if (typeof cb === "function") Promise.resolve().then(() => cb(details));
-    return Promise.resolve(details);
+    let result = details || null;
+    try {
+      details = details || {};
+      const name = String(details.name || "");
+      if (!name) throw new Error("cookies.remove requires a name");
+      if (typeof document !== "undefined") {
+        document.cookie = name + "=; path=" + (details.path || "/") + "; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+      }
+      result = { url: details.url || "", name: name };
+    } catch (e) {
+      console.error("obscura-ext: cookies.remove failed:", e && e.stack || e);
+      result = null;
+    }
+    if (typeof cb === "function") Promise.resolve().then(() => cb(result));
+    return Promise.resolve(result);
   }
 
   // ---- the global itself ------------------------------------------------

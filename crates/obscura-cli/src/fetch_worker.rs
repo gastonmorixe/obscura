@@ -539,10 +539,37 @@ fn dump_links(page: &Page) -> String {
 }
 
 fn dump_markdown(page: &mut Page) -> String {
-    page.evaluate(obscura_browser::HTML_TO_MARKDOWN_JS)
+    let markdown = page
+        .evaluate(obscura_browser::HTML_TO_MARKDOWN_JS)
         .as_str()
         .unwrap_or_default()
-        .to_string()
+        .to_string();
+    collapse_dump_markdown_whitespace(markdown.trim())
+}
+
+/// Generic whitespace cleanup for markdown. Whitespace only: strips
+/// trailing spaces per line and collapses 3+ newlines to max 1 blank line.
+/// Same shape as the text path in main.rs.
+fn collapse_dump_markdown_whitespace(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut blanks = 0usize;
+    for raw_line in text.split('\n') {
+        let line = raw_line.trim_end();
+        if line.is_empty() {
+            blanks += 1;
+            if blanks <= 1 {
+                out.push('\n');
+            }
+        } else {
+            blanks = 0;
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    while out.ends_with('\n') {
+        out.pop();
+    }
+    out
 }
 
 fn dump_accessibility(page: &Page) -> String {
@@ -699,6 +726,14 @@ mod tests {
         assert!(!response.ok);
         assert!(!shutdown);
         assert_eq!(response.error.unwrap()["code"], "unsupported_version");
+    }
+
+    #[test]
+    fn markdown_collapse_blank_runs() {
+        assert_eq!(collapse_dump_markdown_whitespace("# a\n\ntext"), "# a\n\ntext");
+        assert_eq!(collapse_dump_markdown_whitespace("# a\n\n\ntext"), "# a\n\ntext");
+        assert_eq!(collapse_dump_markdown_whitespace("# a\n\n\n\ntext"), "# a\n\ntext");
+        assert_eq!(collapse_dump_markdown_whitespace("# a   \n   \ntext\t "), "# a\n\ntext");
     }
 
     #[test]

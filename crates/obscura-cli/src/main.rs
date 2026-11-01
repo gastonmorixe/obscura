@@ -1921,7 +1921,7 @@ fn dump_text(page: &mut Page) -> String {
     page.with_dom(|dom| {
         if let Ok(Some(body)) = dom.query_selector("body") {
             let text = extract_readable_text(dom, body);
-            text.trim().to_string()
+            collapse_dump_text_whitespace(text.trim())
         } else {
             String::new()
         }
@@ -1931,11 +1931,62 @@ fn dump_text(page: &mut Page) -> String {
 
 fn dump_markdown(page: &mut Page) -> String {
     let result = page.evaluate(obscura_browser::HTML_TO_MARKDOWN_JS);
-    result.as_str().unwrap_or_default().to_string()
+    let markdown = result.as_str().unwrap_or_default();
+    collapse_dump_markdown_whitespace(markdown.trim())
 }
 
 fn is_html_whitespace(c: char) -> bool {
     matches!(c, '\t' | '\n' | '\x0C' | '\r' | ' ')
+}
+
+/// Generic whitespace cleanup for `--dump text`. Whitespace only: strips
+/// trailing spaces per line and collapses 3+ consecutive newlines to 2
+/// (max 1 blank line). Single blank lines stay. No content is removed.
+fn collapse_dump_text_whitespace(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut blanks = 0usize;
+    for raw_line in text.split('\n') {
+        let line = raw_line.trim_end();
+        if line.is_empty() {
+            blanks += 1;
+            if blanks <= 1 {
+                out.push('\n');
+            }
+        } else {
+            blanks = 0;
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    while out.ends_with('\n') {
+        out.pop();
+    }
+    out
+}
+
+/// Generic whitespace cleanup for `--dump markdown`. Whitespace only: strips
+/// trailing spaces per line and collapses 3+ consecutive newlines to 2
+/// (max 1 blank line). Same shape as the text path. No content is removed.
+fn collapse_dump_markdown_whitespace(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut blanks = 0usize;
+    for raw_line in text.split('\n') {
+        let line = raw_line.trim_end();
+        if line.is_empty() {
+            blanks += 1;
+            if blanks <= 1 {
+                out.push('\n');
+            }
+        } else {
+            blanks = 0;
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    while out.ends_with('\n') {
+        out.pop();
+    }
+    out
 }
 
 fn append_readable_text_segment(result: &mut String, pending_space: &mut bool, contents: &str) {
@@ -2477,7 +2528,7 @@ fn dump_assets(page: &Page) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        configure_fetch_navigation_timeout, effective_v8_flags, extract_assets,
+        collapse_dump_markdown_whitespace, collapse_dump_text_whitespace, configure_fetch_navigation_timeout, effective_v8_flags, extract_assets,
         extract_readable_text, fetch_original_bytes, is_quiet_command, link_kind_from_rel,
         merge_proxy, merge_user_agent, normalize_v8_flags, read_urls_from_file, resolve_asset_url,
         select_log_filter, write_or_print, write_or_print_bytes, Args, Command, DumpFormat,
@@ -3122,6 +3173,58 @@ mod tests {
         assert!(!text.contains("console.log"));
         assert!(!text.contains("color: red"));
         assert!(!text.contains("JavaScript is not available"));
+    }
+
+    #[test]
+    fn dump_text_collapse_keeps_single_blank() {
+        assert_eq!(collapse_dump_text_whitespace("a\n\nb"), "a\n\nb");
+    }
+
+    #[test]
+    fn dump_text_collapse_two_blanks_to_one() {
+        assert_eq!(collapse_dump_text_whitespace("a\n\n\nb"), "a\n\nb");
+    }
+
+    #[test]
+    fn dump_text_collapse_three_blanks_to_one() {
+        assert_eq!(collapse_dump_text_whitespace("a\n\n\n\nb"), "a\n\nb");
+    }
+
+    #[test]
+    fn dump_text_collapse_37_blanks_to_one() {
+        let input = format!("a\n{}b", "\n".repeat(37));
+        assert_eq!(collapse_dump_text_whitespace(&input), "a\n\nb");
+    }
+
+    #[test]
+    fn dump_text_collapse_strips_trailing_spaces() {
+        assert_eq!(collapse_dump_text_whitespace("a   \n   \nb\t "), "a\n\nb");
+    }
+
+    #[test]
+    fn dump_text_collapse_keeps_short_lines() {
+        let input = "a\n\n\nb\nc\n\nd";
+        assert_eq!(collapse_dump_text_whitespace(input), "a\n\nb\nc\n\nd");
+    }
+
+    #[test]
+    fn dump_markdown_collapse_keeps_single_blank() {
+        assert_eq!(collapse_dump_markdown_whitespace("# a\n\ntext"), "# a\n\ntext");
+    }
+
+    #[test]
+    fn dump_markdown_collapse_two_blanks_to_one() {
+        assert_eq!(collapse_dump_markdown_whitespace("# a\n\n\ntext"), "# a\n\ntext");
+    }
+
+    #[test]
+    fn dump_markdown_collapse_three_blanks_to_one() {
+        assert_eq!(collapse_dump_markdown_whitespace("# a\n\n\n\ntext"), "# a\n\ntext");
+    }
+
+    #[test]
+    fn dump_markdown_collapse_strips_trailing_spaces() {
+        assert_eq!(collapse_dump_markdown_whitespace("# a   \n   \ntext\t "), "# a\n\ntext");
     }
 
     #[test]
